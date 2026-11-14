@@ -2,7 +2,11 @@ import hmac
 import logging
 import os
 
+from pathlib import Path
+
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from .book import build_book
 from .db import DB
@@ -88,3 +92,12 @@ def get_book():
         return build_book(db)
     finally:
         db.close()
+
+
+PUBLIC = Path(__file__).resolve().parent.parent / "public"  # built by `npm run build` in frontend/
+if PUBLIC.is_dir():
+    app.mount("/assets", StaticFiles(directory=PUBLIC / "assets"), name="assets")
+
+    @app.get("/")
+    def index():
+        return FileResponse(PUBLIC / "index.html")

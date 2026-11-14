@@ -20,7 +20,7 @@ colors:
   band-unbacked: '#9A5B13'
   band-unpriced: '#6B6F7A'
   risk-red: '#B3261E'
-  risk-amber: '#B26A00'
+  risk-amber: '#8F5300'
   changed-wash: '#FFF3C4'
   stale: '#8A5A00'
 typography:
