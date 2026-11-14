@@ -66,6 +66,24 @@ async def poke(tasks: BackgroundTasks):
     return {"started": started}
 
 
+@app.post("/api/resync")
+async def resync(tasks: BackgroundTasks):
+    """Manual resync: mark everything stale, so the worker re-fetches every tool at 1 call a minute.
+    Safe to press repeatedly: the queue dedupes and spacing is kept in the database."""
+    db = _db()
+    try:
+        now = clock.time()
+        db.set_resync(now)
+        Sync(db).schedule(now)
+        started = db.acquire(now, LEASE_TTL, 0)
+        queued = db.queue_len()
+    finally:
+        db.close()
+    if started:
+        tasks.add_task(_run, True)
+    return {"resync_at": now, "queued": queued, "started": started}
+
+
 @app.get("/api/health")
 def get_health():
     db = _db()

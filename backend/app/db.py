@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS caller(
   lease_until DOUBLE PRECISION NOT NULL DEFAULT 0, last_run_end DOUBLE PRECISION NOT NULL DEFAULT 0,
   last_error_at DOUBLE PRECISION, last_error TEXT);
 CREATE TABLE IF NOT EXISTS changes(id INTEGER PRIMARY KEY, n BIGINT NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v DOUBLE PRECISION NOT NULL);
 INSERT INTO caller(id) VALUES(1) ON CONFLICT DO NOTHING;
 INSERT INTO changes(id) VALUES(1) ON CONFLICT DO NOTHING;
 """
@@ -143,3 +144,11 @@ class DB:
 
     def changes(self) -> int:
         return self.x("SELECT n FROM changes WHERE id=1").fetchone()[0]
+
+    # --- manual resync: every snapshot fetched before this time counts as stale ----
+    def set_resync(self, t):
+        self.x("INSERT INTO meta(k,v) VALUES('resync_at',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", t)
+
+    def resync_at(self) -> float:
+        r = self.x("SELECT v FROM meta WHERE k='resync_at'").fetchone()
+        return r[0] if r else 0.0

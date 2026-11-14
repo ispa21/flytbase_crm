@@ -118,7 +118,7 @@ function Column({ aid, acc, changed }: { aid: string; acc: Account; changed: Set
 }
 
 export default function App() {
-  const { book, health, unreachable, changed, clearChanged } = useBook()
+  const { book, health, unreachable, changed, clearChanged, resync, resyncing, resyncError } = useBook()
   const [note, setNote] = useState('')
   useEffect(() => { setNote(changed.size ? `${changed.size} ${changed.size === 1 ? 'item' : 'items'} changed` : '') }, [changed])
   const asOf = when(book?.as_of ?? null)
@@ -128,11 +128,16 @@ export default function App() {
     : health?.stale
       ? `MCP unreachable. Showing data last fetched ${when(health.last_good_poll) ?? 'never (no successful fetch yet)'}.`
       : null
+  const left = health?.resync_at ? health.pending_calls ?? 0 : 0
+  const progress = left > 0 ? `Resyncing · ${left} ${left === 1 ? 'call' : 'calls'} left (about ${left} ${left === 1 ? 'minute' : 'minutes'}, 1 call a minute)` : null
   return (
     <div onPointerDown={clearChanged}>
       <header className={`fresh${banner ? ' stale' : ''}`} role={banner ? 'alert' : undefined}>
         {banner ?? (asOf ? `As of ${asOf} · live` : 'Waiting for first sync')}
         {banner && asOf && !unreachable && <span> · figures as of {asOf}</span>}
+        <button type="button" className="resync" onClick={resync} disabled={resyncing}>{resyncing ? 'Resyncing…' : 'Resync now'}</button>
+        {progress && <span className="resync-note" role="status">{progress}</span>}
+        {resyncError && <span className="resync-note resync-err" role="alert">{resyncError}</span>}
       </header>
       <div className="sr-only" role="status" aria-live="polite">{note}</div>
       <main>

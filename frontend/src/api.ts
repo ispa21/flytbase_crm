@@ -13,7 +13,7 @@ export type Q1 = {
 }
 export type Account = { name: string | null; q1?: Q1; q2?: unknown; q3?: unknown; q4?: unknown; q5?: unknown }
 export type Book = { as_of: string | null; state: string; accounts: Record<string, Account> }
-export type Health = { stale: boolean; last_good_poll: string | null }
+export type Health = { stale: boolean; last_good_poll: string | null; resync_at?: string | null; pending_calls?: number }
 
 const get = async <T,>(url: string): Promise<T> => {
   const r = await fetch(url)
@@ -22,6 +22,7 @@ const get = async <T,>(url: string): Promise<T> => {
 }
 
 export const POLL_MS = 30_000
+export const POKE_MS = 300_000
 
 /** Items (by line id) that are new or differ from the previous book. */
 const fingerprint = (b: Book) => {
@@ -51,6 +52,27 @@ export function useBook() {
     setBook(b)
   }, [])
 
+  // keep the worker alive while the page is open; failures are ignored
+  useEffect(() => {
+    const poke = () => { fetch('/api/poke', { method: 'POST' }).catch(() => {}) }
+    poke()
+    const t = setInterval(poke, POKE_MS)
+    return () => clearInterval(t)
+  }, [])
+
+  const [resyncing, setResyncing] = useState(false)
+  const [resyncError, setResyncError] = useState<string | null>(null)
+  const resync = useCallback(async () => {
+    setResyncing(true); setResyncError(null)
+    try {
+      const r = await fetch('/api/resync', { method: 'POST' })
+      if (!r.ok) throw new Error(String(r.status))
+      setHealth(await get<Health>('/api/health')) // show progress now, not at the next poll
+    } catch (e) {
+      setResyncError(`Resync failed (${e instanceof Error ? e.message : 'error'}). Try again.`)
+    } finally { setResyncing(false) }
+  }, [])
+
   useEffect(() => {
     let dead = false
     const tick = async (first: boolean) => {
@@ -71,5 +93,5 @@ export function useBook() {
   }, [loadBook])
 
   const clearChanged = useCallback(() => setChanged(s => (s.size ? new Set() : s)), [])
-  return { book, health, unreachable, changed, clearChanged }
+  return { book, health, unreachable, changed, clearChanged, resync, resyncing, resyncError }
 }

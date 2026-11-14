@@ -77,3 +77,12 @@ main { max-width: 1200px; margin: 0 auto; padding: 32px 16px 64px; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
   .sk { background: var(--skeleton); }
 }
+
+.fresh { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 12px; }
+.resync { min-height: 44px; min-width: 44px; padding: 0 16px; background: var(--surface-raised); border: 1px solid var(--line-strong); border-radius: var(--r-md); font: 600 13px/16px var(--font); color: var(--ink); cursor: pointer; transition: background-color 150ms ease, transform 160ms var(--ease-out); }
+.resync:hover:not(:disabled) { background: var(--hover-wash); }
+.resync:active:not(:disabled) { background: var(--press-wash); transform: scale(0.97); }
+.resync:disabled { color: var(--ink-muted); cursor: progress; }
+.resync-note { font-weight: 600; letter-spacing: .02em; }
+.resync-err { color: var(--risk-red); }
+@media (prefers-reduced-motion: reduce) { .resync { transition: none; } .resync:active:not(:disabled) { transform: none; } }

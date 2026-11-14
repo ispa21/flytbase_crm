@@ -39,7 +39,7 @@ def fixture(tool, args, check2=True):
 @pytest.fixture
 def db():
     d = DB(os.environ.get("TEST_DATABASE_URL", "sqlite::memory:"))
-    for t in ("snapshots", "signals", "queue", "caller", "changes"):
+    for t in ("snapshots", "signals", "queue", "caller", "changes", "meta"):
         if d.pg:
             d.x(f"DROP TABLE {t}")
     if d.pg:
@@ -191,3 +191,22 @@ def test_http_endpoints(monkeypatch):
     assert c.get("/api/worker", headers={"Authorization": "Bearer nope"}).status_code == 401
     assert c.post("/api/worker").status_code == 401
     assert c.get("/api/health").status_code == 503  # no DATABASE_URL: clear error, no crash
+
+
+def test_resync_marks_everything_stale_and_refetches_once_each(db):
+    clock, starts, client, sync = env(db)
+    for _ in range(3):  # first runs fill the store
+        asyncio.run(run(db, client, sync, clock))
+        clock.t += 400
+    sync.schedule(clock.t)
+    before = db.queue_len()
+    db.set_resync(clock.t)
+    sync.schedule(clock.t)
+    after = db.queue_len()
+    assert after > before  # fresh snapshots are stale again
+    sync.schedule(clock.t)
+    assert db.queue_len() == after  # pressing again adds nothing
+    n = len(starts)
+    asyncio.run(run(db, client, sync, clock))
+    assert len(starts) > n
+    assert all(b - a >= SPACING for a, b in zip(starts, starts[1:]))

@@ -29,7 +29,7 @@ class Sync:
 
     def _due(self, now, every, prio, tool, args=None):
         snap = self.db.latest(tool, args)
-        if snap is None or now - snap[1] > every:
+        if snap is None or now - snap[1] > every or snap[1] < self.db.resync_at():
             self.db.enqueue(prio, tool, args)
 
     def schedule(self, now):

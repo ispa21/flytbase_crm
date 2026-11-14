@@ -1,4 +1,4 @@
-import { render, screen, waitFor, act } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, act } from '@testing-library/react'
 import App from './App'
 
 const line = (id: string, v: number | null, extra = {}) => ({ id, title: `Deal ${id}`, value: v, currency: 'GBP', receipts: [{ id, kind: 'deal' }], ...extra })
@@ -73,4 +73,46 @@ test('new data: counter moves, refetch, New tag only on changed', async () => {
   f.mockImplementation(async (url: string) => ({ ok: true, json: async () => (url.startsWith('/api/book') ? changedBook : url.startsWith('/api/health') ? ok : { n: 2 }) }))
   await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
   await waitFor(() => expect(screen.getAllByText('New')).toHaveLength(1))
+})
+
+const post = (f: any, u: string) => f.mock.calls.filter((c: any[]) => c[0] === u && c[1]?.method === 'POST')
+
+test('poke on load, errors ignored', async () => {
+  const f = mock({ book: book(), health: ok, changes: { n: 1 } })
+  render(<App />)
+  await screen.findByText('Acme')
+  expect(post(f, '/api/poke')).toHaveLength(1)
+})
+
+test('resync success: POSTs, disables while in flight, shows progress', async () => {
+  const h = { ...ok, resync_at: '2026-11-14T09:45:00+00:00', pending_calls: 3 }
+  const f = mock({ book: book(), health: ok, changes: { n: 1 } })
+  let release!: () => void
+  f.mockImplementation(async (url: string, init?: any) => {
+    if (url === '/api/resync') { await new Promise<void>(r => (release = r)); return { ok: true, json: async () => ({ queued: 3 }) } }
+    return { ok: true, json: async () => (url.startsWith('/api/book') ? book() : url.startsWith('/api/health') ? h : { n: 1 }) }
+  })
+  render(<App />)
+  await screen.findByText('Acme')
+  fireEvent.click(screen.getByRole('button', { name: 'Resync now' }))
+  expect(await screen.findByRole('button', { name: 'Resyncing…' })).toBeDisabled()
+  await act(async () => release())
+  expect(await screen.findByText('Resyncing · 3 calls left (about 3 minutes, 1 call a minute)')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Resync now' })).toBeEnabled()
+})
+
+test('resync failure: error line shown', async () => {
+  const f = mock({ book: book(), health: ok, changes: { n: 1 } })
+  f.mockImplementation(async (url: string) => url === '/api/resync' ? { ok: false, status: 500, json: async () => ({}) }
+    : { ok: true, json: async () => (url.startsWith('/api/book') ? book() : url.startsWith('/api/health') ? ok : { n: 1 }) })
+  render(<App />)
+  await screen.findByText('Acme')
+  fireEvent.click(screen.getByRole('button', { name: 'Resync now' }))
+  expect(await screen.findByText(/Resync failed \(500\)/)).toBeInTheDocument()
+})
+
+test('progress text from health alone; none when no calls pending', async () => {
+  mock({ book: book(), health: { ...ok, resync_at: 'x', pending_calls: 1 }, changes: { n: 1 } })
+  render(<App />)
+  expect(await screen.findByText('Resyncing · 1 call left (about 1 minute, 1 call a minute)')).toBeInTheDocument()
 })

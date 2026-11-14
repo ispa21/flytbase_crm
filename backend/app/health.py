@@ -18,6 +18,7 @@ def health(db, now):
         "last_good_poll": iso(last_poll),
         "last_error": {"at": iso(err[0]), "message": err[1]} if err else None,
         "pending_calls": db.queue_len(),
+        "resync_at": iso(db.resync_at()),
         "changes": db.changes(),
         "fetched": [{"tool": t, "args": a, "fetched_at": iso(f), "age_s": round(now - f)}
                     for t, a, f in db.latest_all()],
