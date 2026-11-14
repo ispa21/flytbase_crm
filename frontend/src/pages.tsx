@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react'
 import { Dialog } from '@base-ui/react/dialog'
 import { postNote, useApi, useData, type ActivityItem, type ActivityKind, type Health, type Move, type Note, type NoteStatus, type Person, type Receipt } from './api'
 import { PowerGrid, GapRow } from './home'
+import { toast } from './live'
+import { PowerMap, RiskTimeline, StandMeter } from './viz'
 import { Avatar, BandChip, BANDS, Empty, Failed, Icon, Loading, NotAvailable, NOT_ON_FILE, PageHead, Receipts, Tag, allMoves, dealValue, dealsOf, day, riskLabel, turns, uniq, when, type Deal } from './ui'
 
 const acctLabel = (names: Record<string, string>, id: string) => `${id.toUpperCase()} · ${names[id] ?? id}`
@@ -24,8 +26,8 @@ function SaveBox({ account, deal, initial, kind, label, source, onSaved, rows = 
   const blocked = mcpDown ? REASON : !text.trim() ? 'Write the note first.' : null
   const save = async () => {
     setPhase('saving'); setErr(null)
-    try { const r = await postNote({ account, deal, text: text.trim(), source }); setPhase(r.status); onSaved?.() }
-    catch (e) { setPhase('failed'); setErr(e instanceof Error ? e.message : 'Save failed') }
+    try { const r = await postNote({ account, deal, text: text.trim(), source }); setPhase(r.status); onSaved?.(); toast(r.status === 'failed' ? 'Note could not be saved' : 'Note queued for the CRM', r.status === 'failed' ? 'bad' : 'ok') }
+    catch (e) { setPhase('failed'); setErr(e instanceof Error ? e.message : 'Save failed'); toast('Note could not be saved', 'bad') }
   }
   return (
     <div className="savebox">
@@ -44,7 +46,8 @@ function SaveBox({ account, deal, initial, kind, label, source, onSaved, rows = 
 
 // ---------- Moves ----------
 function MoveCard({ m, acct, onSaved }: { m: Move & { acct: string }; acct: string; onSaved: () => void }) {
-  const { names } = useData()
+  const { names, book } = useData()
+  const deal = dealsOf(book).find(d => d.acct === acct && d.id === m.deal?.id)
   const [open, setOpen] = useState(false)
   return (
     <li className="card move">
@@ -61,6 +64,12 @@ function MoveCard({ m, acct, onSaved }: { m: Move & { acct: string }; acct: stri
           </div>
           {m.due_basis && <p className="muted small">Due basis: {m.due_basis}</p>}
           <p><span className="label">Why now</span><br />{m.why_now}</p>
+          <ul className="rank-why" aria-label="Why this rank">
+            <li>Rank {m.rank} of {book?.accounts[acct]?.q3?.moves.length ?? m.rank} for this account</li>
+            {m.level && <li>{m.level === 'red' ? 'Red' : 'Amber'} risk on file{m.turns_bad_on && m.turns_bad_on !== NOT_ON_FILE ? `, turns bad ${m.turns_bad_on}` : ''}</li>}
+            <li>Due {m.due}{m.due_basis ? `: ${m.due_basis}` : ''}</li>
+            {m.deal && deal && <li>Moves {deal.title}{dealValue(deal) ? `, ${dealValue(deal)}` : ''}</li>}
+          </ul>
           {m.level && <Tag level={m.level}>{m.level === 'red' ? 'Red' : 'Amber'}</Tag>} {m.turns_bad_on && m.turns_bad_on !== NOT_ON_FILE && <span className="muted small">Turns bad on {m.turns_bad_on}</span>}
           <div className="receipt-row"><Receipts rs={m.receipts} /></div>
         </div>
@@ -246,6 +255,7 @@ export function DealPage({ acct, k }: { acct: string; k: string }) {
         </section>
         <section className="card" aria-label="Risks">
           <h2 className="label">What could go wrong</h2>
+          {a.q4 && deal.risks.length > 0 && <RiskTimeline q4={a.q4} deal={deal.id} />}
           {!deal.risks.length ? <p className="muted">Nothing flagged on file for this deal. That is not an all-clear.</p> : (
             <ul className="stack tight">{deal.risks.map((r, i) => (
               <li key={i}><Tag level={r.level}>{r.level === 'red' ? 'Red' : r.level === 'amber' ? 'Amber' : 'Watch'}</Tag> {r.text}
@@ -254,7 +264,7 @@ export function DealPage({ acct, k }: { acct: string; k: string }) {
         </section>
         <section className="card wide" aria-label="Power">
           <h2 className="label">Who holds the power</h2>
-          {power ? <PowerGrid p={power} /> : <p className="muted">Decides, pays, uses, could block: not on file for this deal.</p>}
+          {power ? <><PowerMap p={power} /><PowerGrid p={power} /></> : <p className="muted">Decides, pays, uses, could block: not on file for this deal.</p>}
         </section>
         <section className="card" aria-label="Unknowns">
           <h2 className="label">Not known</h2>
@@ -368,7 +378,7 @@ export function PeoplePage() {
                 <td><button type="button" className="person-btn" onClick={() => setSel(p)}><Avatar name={p.name} /><span><b>{p.name}</b><span className="muted small block">{[p.title, p.org].filter(Boolean).join(', ') || 'title not on file'}</span></span></button></td>
                 <td>{p.side === 'flytbase' ? 'FlytBase' : 'Customer'}</td>
                 <td>{p.role_tags.length ? p.role_tags.map(r => <span key={r} className="role-tag">{r.replace('_', ' ')}</span>) : <span className="muted">not on file</span>}</td>
-                <td>{p.standing && p.standing !== NOT_ON_FILE ? p.standing : <span className="muted">not on file</span>}</td>
+                <td><StandMeter stands={p.standing === NOT_ON_FILE ? null : p.standing} /></td>
                 <td className="num">{p.deals.length}</td>
                 <td>{l ? <span className="num">{day(l.dated)}</span> : <span className="muted">not on file</span>}</td>
               </tr>)

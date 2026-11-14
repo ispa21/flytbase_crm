@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react'
 import { postNote, useApi, useData, type Account, type ActivityItem, type BandKey, type Note, type Person } from './api'
 import { GapRow, Risk } from './home'
+import { toast } from './live'
+import { StandMeter } from './viz'
 import { StatusPill, Timeline, dealHref } from './pages'
 import { Avatar, BandChip, BANDS, Empty, Failed, Loading, NotAvailable, NOT_ON_FILE, PageHead, Receipts, dealValue, dealsOf, money, riskLabel, when } from './ui'
 import './accounts.css'
@@ -150,7 +152,7 @@ function People({ id }: { id: string }) {
             <span className="muted small block">{[p.title, p.side === 'flytbase' ? 'FlytBase' : 'Customer'].filter(Boolean).join(' · ')}</span>
             <span className="muted small block">{p.role_tags.length ? p.role_tags.map(r => r.replace('_', ' ')).join(', ') : 'roles not on file'} · {p.deals.length} {p.deals.length === 1 ? 'deal' : 'deals'}</span>
           </div>
-          <span>{p.standing && p.standing !== NOT_ON_FILE ? p.standing : <span className="muted">standing not on file</span>}</span>
+          <StandMeter stands={p.standing === NOT_ON_FILE ? null : p.standing} />
         </div>))}
     </div>
   )
@@ -174,8 +176,8 @@ function NotesTab({ id }: { id: string }) {
   const blocked = mcpDown ? 'MCP unreachable: notes cannot be saved until the link is back.' : !text.trim() ? 'Write the note first.' : null
   const save = async () => {
     setPhase('saving'); setErr(null)
-    try { const r = await postNote({ account: id, text: text.trim(), source: 'account page' }); setPhase(r.status === 'failed' ? 'failed' : 'queued'); setText(''); reload() }
-    catch (e) { setPhase('failed'); setErr(e instanceof Error ? e.message : 'Save failed') }
+    try { const r = await postNote({ account: id, text: text.trim(), source: 'account page' }); setPhase(r.status === 'failed' ? 'failed' : 'queued'); setText(''); reload(); toast(r.status === 'failed' ? 'Note could not be saved' : 'Note queued for the CRM', r.status === 'failed' ? 'bad' : 'ok') }
+    catch (e) { setPhase('failed'); setErr(e instanceof Error ? e.message : 'Save failed'); toast('Note could not be saved', 'bad') }
   }
   const notes = useMemo(() => (data?.notes ?? []).filter(n => n.account === id), [data, id])
   return (

@@ -4,6 +4,7 @@ import { Popover } from '@base-ui/react/popover'
 import { DataCtx, useApi, useBook, useData, type ActivityItem, type Person } from './api'
 import { AccountsPage } from './accounts'
 import { Home } from './home'
+import { Ago, ToastHost, toast } from './live'
 import { ActivityPage, DealPage, DealsPage, MovesPage, NotesPage, PeoplePage, SyncPage, dealHref } from './pages'
 import { Failed, Icon, bandName, dealsOf, when } from './ui'
 
@@ -120,6 +121,8 @@ export default function App() {
   const [note, setNote] = useState('')
   const gPending = useRef(0)
   useEffect(() => { setNote(changed.size ? `${changed.size} ${changed.size === 1 ? 'item' : 'items'} changed` : '') }, [changed])
+  const seenN = useRef(0)
+  useEffect(() => { if (changed.size > seenN.current) toast(`${changed.size} ${changed.size === 1 ? 'item' : 'items'} changed since the last sync`); seenN.current = changed.size }, [changed])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPalette(o => !o); return }
@@ -185,7 +188,7 @@ export default function App() {
               {['all', ...accounts.map(([id]) => id)].map(id => (
                 <button key={id} type="button" aria-pressed={account === id} title={id === 'all' ? 'Both accounts' : names[id]} onClick={() => setAccount(id)}>{id === 'all' ? 'All' : id.toUpperCase()}</button>))}
             </div>
-            <span className="chip" title={book?.as_of ?? undefined}><i className="dot" aria-hidden="true" />{banner ? `Stale${asOf ? ` · as of ${asOf}` : ''}` : asOf ? `As of ${asOf} · live` : 'Waiting for first sync'}</span>
+            <span className="chip" title={book?.as_of ?? undefined}><i className="dot" aria-hidden="true" />{banner ? `Stale${asOf ? ` · as of ${asOf}` : ''}` : asOf ? `As of ${asOf} · live` : 'Waiting for first sync'}{!banner && asOf && <Ago iso={health?.last_good_poll} />}</span>
             <Bell onSeen={markSeen} />
             <button type="button" className="icon-btn" onClick={toggleTheme} aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}><Icon n={theme === 'dark' ? 'sun' : 'moon'} /></button>
             <button type="button" className="btn resync" onClick={resync} disabled={resyncing}>{resyncing ? 'Resyncing…' : 'Resync now'}</button>
@@ -195,6 +198,7 @@ export default function App() {
           {route !== 'sync' && resyncError && <div className="banner" role="alert">{resyncError}</div>}
           <div className="sr-only" role="status" aria-live="polite">{note}</div>
           <main id="main" tabIndex={-1}>{page}</main>
+          <ToastHost />
         </div>
         <Dialog.Root open={nav} onOpenChange={setNav}>
           <Dialog.Portal>

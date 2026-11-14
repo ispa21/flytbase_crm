@@ -1,6 +1,8 @@
+import { Count } from './live'
+import { MiniBar, RiskTimeline, SignalField } from './viz'
 import { Collapsible } from '@base-ui/react/collapsible'
 import type { Account, Book, BandKey, Changes, DealPower, Entry, Gap, Line, Q4, Q5, RiskItem, RoleKey } from './api'
-import { BANDS, Chev, NOT_ON_FILE, NO_CUR, Receipts, bandName, money, turns } from './ui'
+import { BANDS, Chev, NOT_ON_FILE, NO_CUR, Receipts, bandName, dealsOf, money, turns } from './ui'
 
 function leadOf(a: Account) {
   const l = a.q1?.bands.on_contract.find(x => x.renewal_risk && x.term_ends && x.value != null && x.currency)
@@ -9,7 +11,7 @@ function leadOf(a: Account) {
 
 const ROLES: [RoleKey, string][] = [['decides', 'Decides'], ['pays', 'Pays'], ['uses', 'Uses'], ['could_block', 'Could block']]
 
-function describe(e: Entry): string {
+export function describe(e: Entry): string {
   if (e.who) return e.title ? `${e.who}, ${e.title}` : e.who
   if (e.unnamed_logins) return `${e.unnamed_logins} unnamed ${e.unnamed_logins === 1 ? 'login' : 'logins'}`
   if (e.usage_by) return `Usage by ${e.usage_by}`
@@ -82,10 +84,11 @@ function Band({ k, label, apart, acc, aid, changed }: { k: BandKey; label: strin
         <Chev />
         <span className="band-name"><span className="mark" aria-hidden="true" /><span>{label}</span>{isNew && <span className="tag">New</span>}</span>
         <span className="amt">
-          {cur.length ? cur.map(([c, n]) => <span key={c} className="amt-line"><b>{money(n, c)}</b>{c === NO_CUR && <i>currency not on file</i>}</span>)
+          {cur.length ? cur.map(([c, n]) => <span key={c} className="amt-line"><b><Count n={n} fmt={x => money(x, c)} /></b>{c === NO_CUR && <i>currency not on file</i>}</span>)
             : <span className="none">{k === 'unpriced' ? 'no value yet' : 'none'}</span>}
         </span>
         <span className="band-sub">{lines.length} {lines.length === 1 ? 'deal' : 'deals'} · {BAND_HINT[k]}</span>
+        {k !== 'unpriced' && cur.length === 1 && <MiniBar acc={acc} band={k} currency={cur[0][0]} />}
       </Collapsible.Trigger>
       <Collapsible.Panel className="panel">
         <div className="panel-in">
@@ -143,6 +146,7 @@ function Risks({ q4 }: { q4: Q4 }) {
       </Collapsible.Trigger>
       <Collapsible.Panel className="panel">
         <div className="panel-in">
+          <RiskTimeline q4={q4} />
           {items.length > 0 && <ol className="risk-list">{items.map((r, i) => <Risk key={i} r={r} />)}</ol>}
           {gaps.length > 0 && <ul className="risk-gaps">{gaps.map((g, i) => <li key={i}>Not checked: {g}</li>)}</ul>}
         </div>
@@ -302,6 +306,7 @@ export function Home({ book, changed, names, markSeen, account }: { book: Book |
   return (
     <>
       {book?.changes && <WhatChanged c={book.changes} names={names} onSeen={markSeen} />}
+      {book && book.as_of !== null && <SignalField deals={dealsOf(book).filter(d => account === 'all' || d.acct === account)} />}
       {!book ? <Skeleton />
         : book.as_of === null ? <div className="calm"><p>Waiting for first sync. Figures appear here once the first data arrives.</p></div>
         : <div className={`columns${accounts.length === 1 ? ' one' : ''}`}>{accounts.map(([id, a]) => <Column key={id} aid={id} acc={a} changed={changed} />)}</div>}

@@ -65,7 +65,7 @@ test('deals: table sorts, filters by band, opens detail with value, power, risk 
   fireEvent.click(main().getByRole('button', { name: /Board/ }))
   expect(main().getByRole('region', { name: 'On contract' })).toBeInTheDocument()
   fireEvent.click(main().getAllByRole('link', { name: /Deal d1/ })[0])
-  expect(await main().findByText('Priya Nair, COO')).toBeInTheDocument()
+  expect((await main().findAllByText('Priya Nair, COO')).length).toBeGreaterThan(0) // the power map and the table both name them
   expect(main().getAllByText('£100,000').length).toBeGreaterThan(0)
   expect(main().getByText('Turns bad on 2026-11-30')).toBeInTheDocument()
   expect(main().getAllByText('d1').length).toBeGreaterThan(0)
