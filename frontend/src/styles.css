@@ -1,28 +1,36 @@
-/* Book Tool CRM shell. Tokens first; light and dark are designed together. Flat, hairlines, no shadows except the drawer scrim. */
+/* Book Tool CRM. Design language ported from CallAnalytics ("Signal"): warm neutral surface ramp, three-tier status colour,
+   hairline instrument panels, mono for anything the machine measured. ONE accent (cobalt) for what you can act on. */
 :root {
   color-scheme: light;
-  --paper: #F3F1EA; --card: #FFFFFF; --ink: #14161B; --ink-2: #353A45; --muted: #596070;
-  --line: #E0DBCE; --line-strong: #B9B3A2; --hover: #ECE8DC; --press: #E2DDCD;
-  --accent: #2340B8; --on-accent: #FFFFFF; --focus: #2340B8;
-  --contract: #1F5C4A; --backed: #25609B; --unbacked: #8A5110; --unpriced: #5B6070;
-  --red: #B3261E; --amber: #8A5000; --wash: #FFF1B8; --stale: #7A4B00;
-  --panel: #14161B; --on-panel: #F6F3EA; --on-panel-muted: #A9AEBB; --panel-line: #2B2F38; --panel-hover: #20242C;
-  --sk1: #E8E4D8; --sk2: #F3F0E7; --scrim: rgba(20, 22, 27, .5);
-  --r-sm: 4px; --r-md: 10px; --r-full: 9999px;
-  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --paper: oklch(96.45% 0.0025 106); --card: oklch(100% 0 0); --elevated: oklch(98.05% 0.0017 106); --sunken: oklch(94.25% 0.0029 106);
+  --line: oklch(92.02% 0.0033 106); --line-strong: oklch(86.3% 0.0038 106);
+  --ink: oklch(20.49% 0 0); --ink-2: oklch(51% 0.0026 106); --muted: oklch(51% 0.0026 106);
+  --hover: oklch(94.25% 0.0029 106); --press: oklch(89.5% 0.0035 106);
+  --accent: oklch(50% 0.2 264); --on-accent: #FFFFFF; --focus: oklch(50% 0.2 264); --accent-tint: oklch(95.4% 0.022 262);
+  --contract: oklch(44.79% 0.1083 151.3); --backed: var(--accent); --unbacked: oklch(53.53% 0.1255 57.3); --unpriced: oklch(51% 0.0026 106);
+  --red: oklch(52.02% 0.2007 27.6); --amber: oklch(53.53% 0.1255 57.3); --wash: oklch(96.3% 0.025 78); --stale: oklch(53.53% 0.1255 57.3);
+  --red-tint: oklch(95.6% 0.021 22); --green-tint: oklch(96.2% 0.023 152);
+  --panel: oklch(20.49% 0 0); --on-panel: oklch(96.45% 0.0025 106); --on-panel-muted: oklch(72% 0.004 106); --panel-line: oklch(30% 0 0); --panel-hover: oklch(26% 0 0);
+  --sk1: oklch(94.25% 0.0029 106); --sk2: oklch(98.05% 0.0017 106); --scrim: oklch(20% 0 0 / 0.5);
+  --r-sm: 2px; --r-md: 3px; --r-full: 9999px;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --sans: Geist, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --serif: Geist, system-ui, sans-serif;
   --mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   --side-w: 232px;
 }
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --paper: #0F1115; --card: #171A20; --ink: #ECEAE3; --ink-2: #C9CCD4; --muted: #A0A6B4;
-  --line: #2A2F38; --line-strong: #495061; --hover: #1F232B; --press: #272C36;
-  --accent: #9DB2FF; --on-accent: #0F1115; --focus: #9DB2FF;
-  --contract: #62C9A5; --backed: #78B0EE; --unbacked: #E5A860; --unpriced: #A0A6B4;
-  --red: #FF8F86; --amber: #F2C277; --wash: #3A3217; --stale: #F2C277;
-  --panel: #1D222B; --on-panel: #F1EEE6; --on-panel-muted: #A9AEBB; --panel-line: #333A46; --panel-hover: #272D38;
-  --sk1: #1C2028; --sk2: #272C36; --scrim: rgba(0, 0, 0, .62);
+  --paper: oklch(15% 0.003 106); --card: oklch(18.5% 0.003 106); --elevated: oklch(22.5% 0.003 106); --sunken: oklch(12.5% 0.003 106);
+  --line: oklch(29% 0.004 106); --line-strong: oklch(36.5% 0.005 106);
+  --ink: oklch(92% 0.006 106.5); --ink-2: oklch(70.9% 0.002 106); --muted: oklch(70.9% 0.002 106);
+  --hover: oklch(22.5% 0.003 106); --press: oklch(27% 0.004 106);
+  --accent: oklch(74% 0.14 262); --on-accent: oklch(15% 0.003 106); --focus: oklch(74% 0.14 262); --accent-tint: oklch(26% 0.054 256);
+  --contract: oklch(80.03% 0.1821 151.7); --unbacked: oklch(83.69% 0.1644 84.4); --unpriced: oklch(70.9% 0.002 106);
+  --red: oklch(71.06% 0.1661 22.2); --amber: oklch(83.69% 0.1644 84.4); --wash: oklch(27% 0.05 72); --stale: oklch(83.69% 0.1644 84.4);
+  --red-tint: oklch(26% 0.056 20); --green-tint: oklch(26% 0.048 152);
+  --panel: oklch(22.5% 0.003 106); --on-panel: oklch(92% 0.006 106.5); --on-panel-muted: oklch(70.9% 0.002 106); --panel-line: oklch(31% 0.004 106); --panel-hover: oklch(27% 0.004 106);
+  --sk1: oklch(18.5% 0.003 106); --sk2: oklch(25% 0.004 106); --scrim: oklch(0% 0 0 / 0.62);
 }
 @media (prefers-color-scheme: dark) { :root:not([data-theme='light']):not([data-theme='dark']) { color-scheme: dark; } }
 * { box-sizing: border-box; }
@@ -360,3 +368,44 @@ textarea { width: 100%; padding: 10px 12px; line-height: 1.5; resize: vertical; 
   .btn.resync { padding: 0 12px; }
 }
 @media (max-width: 480px) { .stats { grid-template-columns: minmax(0, 1fr); } .move-top { flex-direction: column; gap: 8px; } .timeline li { flex-direction: column; gap: 4px; } }
+
+/* ===== Signal language: instrument panels, mono for measured things, sharp corners, one accent ===== */
+.label, .sub, .sec-h h3, .grid th, .kind, .slip-k, .pm-role, .bars-cur, .field-key b { font-family: var(--mono); font-weight: 500; letter-spacing: .07em; color: var(--ink-2); }
+.label, .sub, .sec-h h3, .grid th { font-size: 11px; }
+.sec-h h3 { color: var(--ink); }
+.bar { min-height: 52px; padding-top: 6px; padding-bottom: 6px; }
+.brand { font-weight: 700; font-size: 15px; letter-spacing: -0.01em; display: flex; align-items: center; }
+.brand b { font-family: var(--mono); font-weight: 500; letter-spacing: .04em; text-transform: none; font-size: 11px; margin-left: 12px; padding-left: 12px; border-left: 1px solid var(--line); }
+.page-head { padding-bottom: 16px; margin-bottom: 24px; border-bottom: 1px solid var(--line); }
+.page-head h1 { font-weight: 700; letter-spacing: -0.021em; }
+.btn, .search, .seg, .chip, input[type='search'], select, textarea, .icon-btn { border-radius: var(--r-md); }
+.btn { font-weight: 500; font-size: 13px; letter-spacing: -0.005em; }
+.chip { border-radius: var(--r-sm); min-height: 28px; }
+.dot { background: var(--accent); }
+.role-tag, .status, .rtag { border: 0; border-radius: var(--r-sm); display: inline-flex; align-items: center; height: 20px; padding: 0 8px; font: 500 11px/1 var(--mono); letter-spacing: .04em; background: var(--sunken); color: var(--ink-2); }
+.rtag.red, .st-failed { background: var(--red-tint); color: var(--red); }
+.rtag.amber, .st-queued { background: var(--wash); color: var(--amber); }
+.st-saved { background: var(--green-tint); color: var(--contract); }
+.avatar, .acct-mark, .letter-sm, .mini-move .n, .rank { border-radius: var(--r-md); }
+/* a panel's first heading becomes its head: a sunken strip with a hairline, not a floating label */
+.card > h2:first-child, .card > .label:first-child { margin: -18px -20px 6px; padding: 10px 20px; background: var(--elevated); border-bottom: 1px solid var(--line); border-radius: var(--r-md) var(--r-md) 0 0; font: 500 11px/1.2 var(--mono); letter-spacing: .07em; text-transform: uppercase; color: var(--ink-2); }
+/* the signal line: label, a rule that eats the slack, then the value */
+.kv { display: block; }
+.kv > div { display: flex !important; align-items: center; gap: 12px; padding: 7px 0; }
+.kv dt { flex: none; text-align: left; }
+.kv dd { flex: 1; display: flex; align-items: center; gap: 12px; justify-content: flex-end; font-family: var(--mono); font-size: 13px; font-weight: 600; text-align: right; }
+.kv dd::before { content: ''; flex: 1; min-width: 16px; height: 1px; background: var(--line); }
+nav.tabs a[aria-current='page'] { border-bottom-color: var(--accent); }
+.tabs a { font-size: 13px; }
+.link { color: var(--accent); }
+::selection { background: var(--accent-tint); color: var(--ink); }
+/* desktop pointers get the dense instrument size; touch keeps 44px targets */
+@media (pointer: fine) {
+  .btn { min-height: 34px; padding: 0 14px; }
+  .icon-btn { width: 34px; height: 34px; }
+  .search, input[type='search'], select { min-height: 34px; }
+  .nav-link { min-height: 36px; }
+  .seg button { min-height: 32px; font-size: 13px; }
+  .tabs a { min-height: 38px; }
+  .disc-h, .gap-head { min-height: 56px; }
+}

@@ -186,7 +186,7 @@ export default function App() {
             <button type="button" className="search" onClick={() => setPalette(true)} aria-label="Search deals, people, activity"><Icon n="search" size={16} /><span>Search</span><kbd>⌘K</kbd></button>
             <div className="seg acct" role="group" aria-label="Account filter">
               {['all', ...accounts.map(([id]) => id)].map(id => (
-                <button key={id} type="button" aria-pressed={account === id} title={id === 'all' ? 'Both accounts' : names[id]} onClick={() => setAccount(id)}>{id === 'all' ? 'All' : id.toUpperCase()}</button>))}
+                <button key={id} type="button" aria-pressed={account === id} title={id === 'all' ? 'All accounts' : names[id]} onClick={() => setAccount(id)}>{id === 'all' ? 'All' : id.toUpperCase()}</button>))}
             </div>
             <span className="chip" title={book?.as_of ?? undefined}><i className="dot" aria-hidden="true" />{banner ? `Stale${asOf ? ` · as of ${asOf}` : ''}` : asOf ? `As of ${asOf} · live` : 'Waiting for first sync'}{!banner && asOf && <Ago iso={health?.last_good_poll} />}</span>
             <Bell onSeen={markSeen} />
