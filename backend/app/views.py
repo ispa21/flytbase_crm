@@ -71,6 +71,10 @@ class _Paper:
         hits += [(m.get("date"), [self.rr("mail_log.json")]) for m in self.data("mail_log.json").get("mail") or [] if _same(m.get("from"), name)]
         hits += [(c.get("date"), [self.rr("calls_index.json")] + ([self.rr(c["path"])] if c.get("path") else []))
                  for c in self.data("calls_index.json").get("calls") or [] if any(_same(x, name) for x in c.get("customer") or [])]
+        for p, x in self.recs.items():  # email files they wrote, including those a signal brought (not in mail_log)
+            t = x.get("text") or ""
+            if p.startswith("emails/") and _same((re.search(r"^From: (.+)$", t, re.M) or [None, ""])[1], name):
+                hits.append((_iso(t) or None, [self.rr(p)]))
         hits = [(_d(d), r) for d, r in hits if _d(d)]
         if not hits:
             return None, []

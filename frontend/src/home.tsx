@@ -1,14 +1,8 @@
-import { Count } from './live'
-import { MiniBar, RiskTimeline, SignalField } from './viz'
+import type { ReactNode } from 'react'
 import { Collapsible } from '@base-ui/react/collapsible'
-import type { Account, Book, BandKey, Changes, DealPower, Entry, Gap, Line, Q4, Q5, RiskItem, RoleKey } from './api'
-import { BANDS, Chev, Info, NOT_ON_FILE, NO_CUR, Receipts, Stat, WorthInfo, bandName, countLabel, dealsOf, dueIn, kindOf, money, turns } from './ui'
-import { RadarMini } from './radar'
+import type { Account, Book, Changes, DealPower, Entry, Gap, Move, RiskItem, RoleKey } from './api'
+import { Chev, NOT_ON_FILE, NO_CUR, Receipts, bandName, money, turns } from './ui'
 
-function leadOf(a: Account) {
-  const l = a.q1?.bands.on_contract.find(x => x.renewal_risk && x.term_ends && x.value != null && x.currency)
-  return l && { label: l.title, text: `Renewal ends ${l.term_ends}: ${money(l.value!, l.currency!)} on contract.`, receipts: l.receipts }
-}
 
 const ROLES: [RoleKey, string][] = [['decides', 'Decides'], ['pays', 'Pays'], ['uses', 'Uses'], ['could_block', 'Could block']]
 
@@ -57,60 +51,10 @@ export function PowerGrid({ p }: { p: DealPower }) {
   )
 }
 
-function Power({ p }: { p: DealPower }) {
-  return (
-    <Collapsible.Root className="power">
-      <Collapsible.Trigger className="power-head"><Chev /><span>Who decides, pays, uses, could block</span></Collapsible.Trigger>
-      <Collapsible.Panel className="panel"><PowerGrid p={p} /></Collapsible.Panel>
-    </Collapsible.Root>
-  )
-}
 
-function Band({ k, label, apart, acc, aid, changed }: { k: BandKey; label: string; apart?: boolean; acc: Account; aid: string; changed: Set<string> }) {
-  const q1 = acc.q1!
-  const lines = q1.bands[k]
-  const t = k === 'unpriced' ? null : q1.totals[k]
-  const cur = Object.entries(t?.by_currency ?? {})
-  const isNew = lines.some(l => changed.has(`${aid}/${k}/${l.id ?? l.title}`))
-  return (
-    <Collapsible.Root className={`disc band-${k}${apart ? ' apart' : ''}${isNew ? ' changed' : ''}`}>
-      <Collapsible.Trigger className="disc-h">
-        <Chev />
-        <span className="band-name"><span className="mark" aria-hidden="true" /><span>{label}</span>{isNew && <span className="tag">New</span>}</span>
-        <span className="amt">
-          {cur.length ? cur.map(([c, n]) => <span key={c} className="amt-line"><b><Count n={n} fmt={x => money(x, c)} /></b>{c === NO_CUR && <i>currency not on file</i>}</span>)
-            : <span className="none">{k === 'unpriced' ? 'no value yet' : 'none'}</span>}
-        </span>
-        <span className="band-sub">{lines.length} {lines.length === 1 ? 'deal' : 'deals'}</span>
-        {k !== 'unpriced' && cur.length === 1 && <MiniBar acc={acc} band={k} currency={cur[0][0]} />}
-      </Collapsible.Trigger>
-      <Collapsible.Panel className="panel">
-        <div className="panel-in">
-          {lines.length === 0 && <p className="muted">No deals in this band.</p>}
-          {lines.map(l => <DealRow key={l.id ?? l.title} aid={aid} l={l} k={k} power={acc.q2?.deals?.find(d => d.deal === l.id)} />)}
-          {k !== 'unpriced' && !!t?.receipts.length && <div className="deal"><span className="sub">All receipts</span><Receipts rs={t.receipts} /></div>}
-        </div>
-      </Collapsible.Panel>
-    </Collapsible.Root>
-  )
-}
 
-function DealRow({ l, k, power, aid }: { l: Line; k: BandKey; power?: DealPower; aid: string }) {
-  const val = l.value == null ? (k === 'unpriced' ? '' : 'no value')
-    : l.currency ? money(l.value, l.currency) : `${l.value.toLocaleString('en-GB')} (currency not on file)`
-  return (
-    <div className="deal">
-      <div className="deal-top"><strong>{l.title}</strong><span className="num">{val}</span></div>
-      {l.renewal_risk && <span className="risk">Renewal risk{l.term_ends ? `, term ends ${l.term_ends}` : ''}</span>}
-      {l.note && <div className="muted">{l.note}</div>}
-      <Receipts rs={l.receipts} />
-      {power && <Power p={power} />}
-      {l.id && <a className="link" href={`#/deals/${aid}/${l.id}`}>Open deal</a>}
-    </div>
-  )
-}
 
-export const KIND: Record<string, string> = { renewal: 'Renewal', cold: 'Going cold', stuck: 'Stuck', usage_drop: 'Usage', signal: 'Signal' }
+export const KIND: Record<string, string> = { renewal: 'Renewal', cold: 'Going cold', stuck: 'Stuck', usage_drop: 'Usage', signal: 'Signal', insight: 'Insight' }
 
 export function Risk({ r }: { r: RiskItem }) {
   const bad = r.turns_bad_on && r.turns_bad_on !== NOT_ON_FILE
@@ -126,27 +70,6 @@ export function Risk({ r }: { r: RiskItem }) {
   )
 }
 
-function Risks({ q4 }: { q4: Q4 }) {
-  const items = q4.items ?? []
-  const gaps = q4.gaps ?? []
-  if (!items.length && !gaps.length) return null
-  return (
-    <Collapsible.Root className="disc risks">
-      <Collapsible.Trigger className="disc-h">
-        <Chev />
-        <span className="band-name"><span>Slipping</span></span>
-        <span className="amt"><span className="amt-line"><b>{items.length}</b><i>{items.length === 1 ? 'item' : 'items'}</i></span></span>
-      </Collapsible.Trigger>
-      <Collapsible.Panel className="panel">
-        <div className="panel-in">
-          <RiskTimeline q4={q4} />
-          {items.length > 0 && <ol className="risk-list">{items.map((r, i) => <Risk key={i} r={r} />)}</ol>}
-          {gaps.length > 0 && <ul className="risk-gaps">{gaps.map((g, i) => <li key={i}>Not checked: {g}</li>)}</ul>}
-        </div>
-      </Collapsible.Panel>
-    </Collapsible.Root>
-  )
-}
 
 /** Value at stake per currency, never summed across currencies. */
 export const stake = (g: Gap) => {
@@ -184,16 +107,6 @@ export function GapRow({ g }: { g: Gap }) {
   )
 }
 
-function NotKnown({ q5 }: { q5: Q5 }) {
-  const gaps = [...(q5.gaps ?? [])].sort((a, b) => (b.value_at_stake ?? -1) - (a.value_at_stake ?? -1)) // highest value first; unpriced last (stable)
-  if (!gaps.length) return null
-  return (
-    <div className="not-known">
-      <h3 className="label strip-title">Not known yet</h3>
-      {gaps.map((g, i) => <GapRow key={i} g={g} />)}
-    </div>
-  )
-}
 
 export function WhatChanged({ c, names, onSeen }: { c: Changes; names: Record<string, string>; onSeen: () => void }) {
   const acc = (id?: string | null) => (id && names[id]) || id || ''
@@ -225,85 +138,106 @@ export function WhatChanged({ c, names, onSeen }: { c: Changes; names: Record<st
 }
 
 export const Skeleton = () => (
-  <div className="columns" aria-busy="true">
+  <div className="home" aria-busy="true">
     <span className="sr-only" role="status">Loading…</span>
-    {[0, 1].map(i => (
-      <section key={i} className="column" aria-hidden="true">
-        <div className="sk sk-head" />
-        <div className="sk sk-lead" />
-        {[0, 1, 2, 3].map(j => <div key={j} className="sk sk-row" />)}
-      </section>
-    ))}
+    {[0, 1, 2].map(i => <div key={i} className="sk sk-row" aria-hidden="true" />)}
   </div>
 )
 
-export function Column({ aid, acc, changed }: { aid: string; acc: Account; changed: Set<string> }) {
-  const lead = leadOf(acc)
-  const urgent = acc.q4?.items?.[0]
-  const kinds = acc.q1 ? Object.values(acc.q1.bands).flat().map(kindOf) : []
-  const due = dueIn(acc.q3?.moves ?? [], acc.q4?.today ?? new Date().toISOString().slice(0, 10))
-  const kick = urgent?.level === 'red' ? 'red' : urgent?.level === 'amber' ? 'amber' : ''
+// ---------- Home: two things only. The three moves to make first, and one card per account in five sentences ----------
+type Dot = 'red' | 'amber' | 'good' | 'grey' | null
+const LV: Record<string, number> = { red: 0, amber: 1 }
+const fmt = (by: Record<string, number> | undefined) => Object.entries(by ?? {}).map(([c, n]) => (c === NO_CUR ? `${n.toLocaleString('en-GB')} (currency not on file)` : money(n, c))).join(' + ')
+const daysTo = (iso: string, today: string) => Math.round((Date.parse(iso) - Date.parse(today)) / 86_400_000)
+
+function Line({ label, dot, href, children }: { label: string; dot: Dot; href: string; children: ReactNode }) {
   return (
-    <section className="column" aria-label={acc.name ?? aid}>
-      <div className="head">
-        <h2>{acc.name ?? aid}</h2>
-        {acc.q1 && <span className="muted">{countLabel(kinds)}</span>}
+    <a className="hl" href={href}>
+      <span className={`hl-dot ${dot ?? ''}`} aria-hidden="true" />
+      <span className="hl-k">{label}</span>
+      <span className="hl-v">{children}</span>
+      <Chev />
+    </a>
+  )
+}
+
+function worth(a: Account) {
+  const t = a.q1?.totals
+  if (!t) return 'not available yet'
+  const parts = [fmt(t.on_contract.by_currency) && `${fmt(t.on_contract.by_currency)} on contract`,
+    fmt(t.backed_upside.by_currency) && `${fmt(t.backed_upside.by_currency)} likely more`,
+    fmt(t.unbacked.by_currency) && `${fmt(t.unbacked.by_currency)} not backed (kept apart)`].filter(Boolean)
+  const unpriced = a.q1!.bands.unpriced.length
+  return [...parts, unpriced ? `${unpriced} with no value yet` : ''].filter(Boolean).join(' · ') || 'no value on file'
+}
+
+function decider(a: Account): { text: string; dot: Dot } {
+  const ren = a.q1?.bands.on_contract[0]
+  const deal = a.q2?.deals.find(d => d.deal === ren?.id) ?? a.q2?.deals[0]
+  const e = deal?.roles.decides.entries[0] ?? (a.q2 as { contract?: { decides?: { entries: Entry[] } } } | undefined)?.contract?.decides?.entries[0]
+  if (!e?.who) return { text: 'not on file', dot: 'grey' }
+  const named = (e as Entry & { person_named?: boolean }).person_named !== false
+  return { text: `${e.who}${e.title ? `, ${e.title}` : ''}${named ? '' : ' (no named person)'}${e.stands && e.stands !== NOT_ON_FILE ? ` · ${e.stands}` : ''}`, dot: named ? null : 'amber' }
+}
+
+function AccountCard({ id, a, today }: { id: string; a: Account; today: string }) {
+  const ren = a.q1?.bands.on_contract.find(l => l.term_ends)
+  const risks = [...(a.q4?.items ?? [])].sort((x, y) => (LV[x.level ?? ''] ?? 2) - (LV[y.level ?? ''] ?? 2))
+  const worst = risks[0]
+  const m = a.q3?.moves?.[0]
+  const gaps = [...(a.q5?.gaps ?? [])].sort((x, y) => (y.value_at_stake ?? -1) - (x.value_at_stake ?? -1))
+  const top = a.insights?.items?.[0]
+  const who = decider(a)
+  const health: Dot = worst?.level === 'red' ? 'red' : worst?.level === 'amber' ? 'amber' : null
+  return (
+    <section className="card hcard" aria-label={a.name ?? id}>
+      <div className="hcard-h">
+        <span className={`hl-dot ${health ?? ''}`} aria-hidden="true" />
+        <h2><a href={`#/accounts/${id}`}>{a.name ?? id}</a></h2>
+        {ren?.term_ends && <span className="muted small nowrap">Renewal {ren.term_ends} · {daysTo(ren.term_ends, today)} days</span>}
       </div>
-      {(lead || urgent) ? (
-        <div className="lead">
-          {lead && <>
-            <span className="kicker">{lead.label}</span>
-            <p className="display">{lead.text}</p>
-            <Receipts rs={lead.receipts} />
-          </>}
-          {urgent && (
-            <div className={`urgent${lead ? ' after' : ''}`}>
-              <span className={`kicker ${kick}`}>{kick === 'red' ? 'Going red' : kick === 'amber' ? 'Amber' : 'Watch'}</span>
-              <p className="display">{urgent.text}</p>
-              <p className="when">{turns(urgent)}</p>
-              <Receipts rs={urgent.receipts} />
-            </div>
-          )}
-        </div>
-      ) : null}
-      {acc.q1 ? (
-        <div className="sec">
-          <div className="sec-h"><h3>Worth</h3><Info><WorthInfo /></Info></div>
-          {BANDS.map((b, i) => (
-            <div key={b.key} className="ledger-row">
-              {i === 2 && <div className="ledger-sub">Held apart</div>}
-              <Band k={b.key} label={b.label} apart={b.apart} acc={acc} aid={aid} changed={changed} />
-            </div>
-          ))}
-        </div>
-      ) : <p className="empty">Worth not available yet</p>}
-      {!!acc.q3?.moves?.length && (
-        <div className="sec">
-          <div className="sec-h"><h3>Do first</h3><Stat n={due.week} label="due this week" />{due.late > 0 && <Stat n={due.late} label="late" tone="red" />}</div>
-          <ol className="firsts">
-            {acc.q3.moves.map(m => (
-              <li key={m.rank}><span className="rank">{m.rank}</span>
-                <span><a className="link" href="#/moves">{m.action}</a><span className="muted"> · {m.owner} · <span className="nowrap">due {m.due}</span></span></span></li>
-            ))}
-          </ol>
-        </div>
-      )}
-      {(acc.q4 || acc.radar) && <div className="sec"><div className="sec-h"><h3>Going wrong</h3></div>{acc.radar && <RadarMini acct={aid} radar={acc.radar} />}{acc.q4 && <Risks q4={acc.q4} />}</div>}
-      {acc.q5 && <NotKnown q5={acc.q5} />}
+      <Line label="Worth" dot={null} href="#/deals">{worth(a)}</Line>
+      <Line label="Who decides" dot={who.dot} href="#/power">{who.text}</Line>
+      <Line label="Next" dot={m ? (m.overdue_since ? 'red' : (m.level as Dot) ?? null) : 'grey'} href="#/tasks">
+        {m ? <>{m.action} · <span className="nowrap">by {m.due}{m.overdue_since ? ' (overdue)' : ''}</span></> : 'no move on file'}</Line>
+      <Line label="At risk" dot={(worst?.level as Dot) ?? (worst ? null : 'grey')} href="#/radar">
+        {worst ? <>{worst.text}{worst.turns_bad_on !== NOT_ON_FILE && <span className="muted"> · {turns(worst).toLowerCase()}</span>}{risks.length > 1 && <span className="muted"> · +{risks.length - 1} more</span>}</> : 'nothing flagged (not an all-clear)'}</Line>
+      <Line label="Not known" dot="grey" href="#/radar">{gaps.length ? <>{gaps.length} {gaps.length === 1 ? 'gap' : 'gaps'}; biggest: {gaps[0].text}</> : a.q5 ? 'no gaps recorded' : 'not available yet'}</Line>
+      {top && <Line label="Insight" dot={top.tone === 'red' ? 'red' : top.tone === 'amber' ? 'amber' : top.tone === 'good' ? 'good' : null} href="#/insights">{top.headline}</Line>}
     </section>
   )
 }
 
-
-export function Home({ book, changed, names, markSeen, account }: { book: Book | null; changed: Set<string>; names: Record<string, string>; markSeen: () => void; account: string }) {
-  const accounts = Object.entries(book?.accounts ?? {}).filter(([id]) => account === 'all' || id === account)
+function FirstMoves({ book, ids, names }: { book: Book; ids: string[]; names: Record<string, string> }) {
+  const all = ids.flatMap(id => (book.accounts[id].q3?.moves ?? []).map(m => ({ ...m, acct: id })))
+  const rank = (m: Move) => [m.overdue_since ? 0 : 1, LV[m.level ?? ''] ?? 2, m.due] as const
+  const top = all.sort((a, b) => { const x = rank(a), y = rank(b); return x[0] - y[0] || x[1] - y[1] || x[2].localeCompare(y[2]) }).slice(0, 3)
+  if (!top.length) return null
   return (
-    <>
-      {book?.changes && <WhatChanged c={book.changes} names={names} onSeen={markSeen} />}
-      {book && book.as_of !== null && <SignalField deals={dealsOf(book).filter(d => account === 'all' || d.acct === account)} />}
-      {!book ? <Skeleton />
-        : book.as_of === null ? <div className="calm"><p>Waiting for first sync. Figures appear here once the first data arrives.</p></div>
-        : <div className={`columns${accounts.length === 1 ? ' one' : ''}`}>{accounts.map(([id, a]) => <Column key={id} aid={id} acc={a} changed={changed} />)}</div>}
-    </>
+    <section className="card firsts-card" aria-label="Do these first">
+      <h2 className="label">Do these first</h2>
+      <ol className="first3">{top.map((m, i) => (
+        <li key={`${m.acct}${m.rank}`}>
+          <span className={`hl-dot ${m.overdue_since ? 'red' : m.level ?? ''}`} aria-hidden="true" /><span className="n">{i + 1}</span>
+          <a className="grow" href="#/tasks"><b>{m.action}</b><span className="muted small block">{m.owner} · by {m.due}{m.overdue_since ? ' (overdue)' : ''} · {names[m.acct] ?? m.acct}{m.deal ? ` · ${m.deal.title}` : ''}</span></a>
+          <Receipts rs={m.receipts.slice(0, 2)} />
+        </li>))}</ol>
+    </section>
+  )
+}
+
+export function Home({ book, names, markSeen, account }: { book: Book | null; changed: Set<string>; names: Record<string, string>; markSeen: () => void; account: string }) {
+  if (!book) return <Skeleton />
+  if (book.as_of === null) return <div className="calm"><p>Waiting for first sync. Figures appear here once the first data arrives.</p></div>
+  const ids = Object.keys(book.accounts).filter(id => account === 'all' || id === account)
+  const today = book.today ?? Object.values(book.accounts).find(a => a.q4?.today)?.q4?.today ?? new Date().toISOString().slice(0, 10)
+  const c = book.changes, n = c ? c.moved.length + c.new_deals.length + c.new_signals.length : 0
+  return (
+    <div className="home">
+      {n > 0 && <p className="news"><b>{n} new</b> since you last looked{c!.new_signals[0]?.title ? `: ${c!.new_signals[0].title}` : ''} <button type="button" className="btn ghost" onClick={markSeen}>Mark as seen</button></p>}
+      <FirstMoves book={book} ids={ids} names={names} />
+      <div className="hcards">{ids.map(id => <AccountCard key={id} id={id} a={book.accounts[id]} today={today} />)}</div>
+      {book.today && book.today_basis !== 'server date' && <p className="muted small">Days are counted from {book.today}, the newest record on file.</p>}
+    </div>
   )
 }

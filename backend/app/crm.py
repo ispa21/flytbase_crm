@@ -3,9 +3,13 @@ Every item cites receipts that are checked against the same snapshots as the boo
 import csv
 import io
 import json
-from datetime import datetime, timezone
+import re
+from datetime import date, datetime, timezone
 
 from .book import _known, _rec, build_book, check_receipts
+from .records import merged
+from .sync import account_ids
+from .views import _Paper, _same
 
 NOTE_MAX = 4000  # write_note.text limit, tools_list.json
 KINDS = ("note", "task", "risk", "next_step")
@@ -13,9 +17,10 @@ SENDING_STALE = 600  # s: a note still `sending` after this is shown failed (out
 
 
 # ---- write-back ----------------------------------------------------------
-def validate_note(body: dict, ma: dict) -> tuple[dict | None, str | None]:
-    """-> (clean fields, None) or (None, reason). `ma` is the latest get_my_accounts payload."""
-    accs = {a["id"]: a for a in ma.get("accounts") or [] if isinstance(a, dict) and a.get("id")}
+def validate_note(body: dict, accounts: list) -> tuple[dict | None, str | None]:
+    """-> (clean fields, None) or (None, reason). `accounts`: every account the app knows (load()["accs"]).
+    Whether the MCP accepts an account is its call: a refusal comes back as a failed note with its error."""
+    accs = {a["id"]: a for a in accounts if isinstance(a, dict) and a.get("id")}
     acc = body.get("account")
     if acc not in accs:
         return None, f"unknown account {acc!r}; known: {sorted(accs)}"
@@ -34,7 +39,14 @@ def validate_note(body: dict, ma: dict) -> tuple[dict | None, str | None]:
         return None, "source must be a string of at most 60 characters"
     if len(note_text(text, deal)) > NOTE_MAX:
         return None, f"text too long (max {NOTE_MAX} characters including the deal tag)"
-    return {"account": acc, "deal": deal, "text": text, "kind": kind, "source": source}, None
+    title = body.get("title")
+    if title is not None and (not isinstance(title, str) or not title.strip() or len(title) > 120):
+        return None, "title must be a non-empty string of at most 120 characters"
+    draft = body.get("draft")
+    if draft is not None and (not isinstance(draft, str) or not 0 < len(draft) <= 64):
+        return None, "draft must be a draft id"
+    return {"account": acc, "deal": deal, "text": text, "kind": kind, "source": source,
+            "title": title.strip() if title else None, "draft": draft}, None
 
 
 def note_text(text, deal):
@@ -43,7 +55,8 @@ def note_text(text, deal):
 
 def note_args(n: dict) -> dict:
     """MCP write_note arguments for a stored note row."""
-    return {"text": note_text(n["text"], n["deal"]), "account": n["account"], "kind": n["kind"]}
+    a = {"text": note_text(n["text"], n["deal"]), "account": n["account"], "kind": n["kind"]}
+    return {**a, "title": n["title"]} if n.get("title") else a
 
 
 def note_outcome(resp) -> tuple[bool, str | None]:
@@ -73,22 +86,30 @@ def public_note(n: dict, now: float) -> dict:
 
 # ---- snapshots -------------------------------------------------------------
 def load(db):
-    """Latest snapshots -> {ma, pw, signals, team, as_of} or None before the first sync."""
+    """Latest snapshots -> {ma, accs, pw, signals, team, as_of} or None before the first sync.
+    `accs`: get_my_accounts accounts plus every account whoami or paperwork names (sync.account_ids), the same list
+    the book uses. `pw`: paperwork with the records signals brought since (records.merged)."""
     ma = db.latest("get_my_accounts")
     if not ma or not isinstance(ma[0], dict):
         return None
-    pw, times = {}, [ma[1]]
-    for a in ma[0].get("accounts") or []:
-        s = db.latest("get_all_paperwork", {"account": a["id"]})
-        if s:
-            pw[a["id"]] = s[0]
-            times.append(s[1])
     sg = db.latest("get_signals")
     signals = sg[0].get("signals") or [] if sg and isinstance(sg[0], dict) else None
+    accs = [a for a in ma[0].get("accounts") or [] if isinstance(a, dict) and a.get("id")]
+    have = {a["id"] for a in accs}
+    accs += [{"id": i, "paperwork_only": True} for i in account_ids(db) if i not in have]
+    pw, times = {}, [ma[1]]
+    for a in accs:
+        s = db.latest("get_all_paperwork", {"account": a["id"]})
+        if s:
+            pw[a["id"]] = merged(s[0], signals, a["id"])
+            times.append(s[1])
+        if a.get("paperwork_only"):
+            a["name"] = _data(_recs(pw.get(a["id"])), "profile.json").get("name")
     if sg:
         times.append(sg[1])
     tm = db.latest("get_flytbase_team")
-    return {"ma": ma[0], "pw": pw, "signals": signals, "team": (tm[0].get("people") or []) if tm and isinstance(tm[0], dict) else [],
+    return {"ma": ma[0], "accs": accs, "pw": pw, "signals": signals,
+            "team": (tm[0].get("people") or []) if tm and isinstance(tm[0], dict) else [],
             "as_of": datetime.fromtimestamp(min(times), timezone.utc).isoformat()}
 
 
@@ -114,7 +135,7 @@ def _checked(items, acc, ma, pw, signals):
 # ---- activity ----------------------------------------------------------------
 def activity(snap) -> dict:
     items = []
-    for acc in snap["ma"].get("accounts") or []:
+    for acc in snap["accs"]:
         aid, pw = acc["id"], snap["pw"].get(acc["id"])
         recs, deals = _recs(pw), {o["id"] for o in acc.get("opportunities") or []}
         rr = lambda p: {"id": _rec(aid, p), "kind": "record"}  # noqa: E731
@@ -153,13 +174,27 @@ def activity(snap) -> dict:
 
 
 # ---- people --------------------------------------------------------------------
+def _facts(paper, users, signals, aid, name, sid, today):
+    """Dated facts about one customer person, exact name only: last contact, sign-ins, signals that carry their email."""
+    last, lrec = paper.last_contact(name, sid)
+    u = next((u for u in users if _same(u.get("name"), name)), None)
+    sig = [s for s in signals or [] if isinstance(s, dict) and s.get("account") == aid and s.get("id")
+           and any(_same((re.search(r"^From: (.+)$", r.get("text") or "", re.M) or [None, ""])[1], name) for r in s.get("records") or [])]
+    return {"last_contact": {"date": last.isoformat(), "days": (today - last).days} if last else None,
+            "sign_ins_90": u.get("sign_ins_last_90_days") if u else None, "last_sign_in": u.get("last_sign_in") if u else None,
+            "signals": [{"id": s["id"], "title": s.get("title"), "dated": s.get("dated")} for s in sig]}, \
+        lrec + ([paper.rr("users.json")] if u else []) + [{"id": s["id"], "kind": "signal"} for s in sig]
+
+
 def people(snap, book) -> dict:
-    """`book`: build_book output for the same snapshots (q2 gives roles and deals)."""
+    """`book`: build_book output for the same snapshots (q2 gives roles and deals; `today` is the game date)."""
     out = []
+    today = date.fromisoformat(book.get("today") or date.today().isoformat())
     team = {p["name"]: p for p in snap["team"] if isinstance(p, dict) and p.get("name")}
     team_by_id = {p["id"]: p for p in team.values() if p.get("id")}
-    for acc in snap["ma"].get("accounts") or []:
+    for acc in snap["accs"]:
         aid, pw = acc["id"], snap["pw"].get(acc["id"])
+        paper, users = _Paper(acc, pw), _data(_recs(pw), "users.json").get("users") or []
         recs = _recs(pw)
         rr = lambda p: {"id": _rec(aid, p), "kind": "record"}  # noqa: E731
         mail = _data(recs, "mail_log.json").get("mail") or []
@@ -181,9 +216,10 @@ def people(snap, book) -> dict:
                 rec.append(rr("mail_log.json"))
             if any(s["name"] in (c.get("customer") or []) for c in calls):
                 rec.append(rr("calls_index.json"))
+            facts, frec = _facts(paper, users, snap["signals"], aid, s["name"], s["id"], today)
             mine.append({"id": f"{aid}:{s['id']}", "account": aid, "name": s["name"], "title": s.get("role"), "org": org,
                          "side": "customer", "role_tags": sorted(tags), "standing": s.get("relationship"),
-                         "deals": sorted(deals), "receipts": rec})
+                         "deals": sorted(deals), **facts, "receipts": rec + frec})
         # FlytBase side: only people the team list names AND a record of this account mentions
         fb = {}
         fs = prof.get("flytbase_side") or {}
@@ -219,3 +255,26 @@ def people_view(db):
 def activity_view(db):
     snap = load(db)
     return {"as_of": None, "state": "waiting for first sync", "items": []} if snap is None else {"state": "ok", **activity(snap)}
+
+
+# ---- automation: a draft note for every red or amber risk (q4), waiting for one click -------------------
+def _draft_id(aid, key):
+    import hashlib
+    return hashlib.sha1(f"{aid}|{key}".encode()).hexdigest()[:16]  # stable across syncs: numbers in the text may move
+
+
+def drafts(book, decided) -> list:
+    """Red and amber q4 items as draft risk notes. `decided`: db.drafts(). Nothing is sent from here."""
+    out = []
+    for aid, acc in (book.get("accounts") or {}).items():
+        for i in (acc.get("q4") or {}).get("items") or []:
+            if i.get("level") not in ("red", "amber"):
+                continue
+            key = f"{i['kind']}:{i.get('rule') or i.get('deal') or 'contract'}"
+            did = _draft_id(aid, key)
+            ids = ", ".join(r["id"] for r in i["receipts"])
+            out.append({"id": did, "account": aid, "kind": "risk", "level": i["level"], "deal": i.get("deal"),
+                        "title": i["text"][:120],
+                        "text": f"Risk ({i['level']}): {i['text']}. Turns bad on: {i['turns_bad_on']}. Records: {ids}.",
+                        "receipts": i["receipts"], "decision": decided.get(did)})
+    return out

@@ -41,7 +41,7 @@ def go(db, clock, client, sync):
 def test_validate(db):
     load(db)
     ma = db.latest("get_my_accounts")[0]
-    v = lambda **b: validate_note(b, ma)  # noqa: E731
+    v = lambda **b: validate_note(b, ma["accounts"])  # noqa: E731
     assert v(account="Z", text="x")[1]
     assert v(account="A", text="   ")[1]
     assert v(account="A", text="x" * 4001)[1]

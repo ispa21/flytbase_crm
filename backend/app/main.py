@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .book import build_book, what_changed
-from .crm import activity_view, load, people_view, public_note, validate_note
+from .crm import activity_view, drafts, load, people_view, public_note, validate_note
 from .db import DB
 from .health import health
 from .mcp import McpClient
@@ -125,11 +125,13 @@ async def post_note(body: dict, tasks: BackgroundTasks):
         snap = load(db)
         if snap is None:
             raise HTTPException(503, "accounts not loaded yet (waiting for first sync)")
-        note, why = validate_note(body, snap["ma"])
+        note, why = validate_note(body, snap["accs"])
         if why:
             raise HTTPException(422, why)
         now = clock.time()
-        nid = db.add_note(note["account"], note["deal"], note["text"], note["kind"], note["source"], now)
+        nid = db.add_note(note["account"], note["deal"], note["text"], note["kind"], note["source"], now, note["title"])
+        if note["draft"]:  # approving an automation draft: record it, so it never shows as waiting again
+            db.decide_draft(note["draft"], note["account"], "approved", now, nid)
         db.enqueue(WRITE, "write_note", {"note_id": nid})
         db.bump()
         started = bool(os.environ.get("AQ_TOKEN")) and db.acquire(now, LEASE_TTL, 0)
@@ -146,6 +148,42 @@ def get_notes():
     try:
         now = clock.time()
         return {"notes": [public_note(n, now) for n in db.notes()]}
+    finally:
+        db.close()
+
+
+@app.get("/api/insights")
+def get_insights():
+    """Fact-only insights per account (also in /api/book as accounts[x].insights)."""
+    db = _db()
+    try:
+        b = build_book(db)
+        return {"as_of": b["as_of"], "today": b.get("today"), "today_basis": b.get("today_basis"),
+                "accounts": {k: {"name": a.get("name"), **a["insights"]} for k, a in b["accounts"].items()}}
+    finally:
+        db.close()
+
+
+@app.get("/api/drafts")
+def get_drafts():
+    """Automation: a draft note for each red or amber risk, with any decision already taken. Sending needs a click."""
+    db = _db()
+    try:
+        return {"drafts": drafts(build_book(db), db.drafts())}
+    finally:
+        db.close()
+
+
+@app.post("/api/drafts/{did}/dismiss")
+def dismiss_draft(did: str):
+    db = _db()
+    try:
+        d = next((d for d in drafts(build_book(db), {}) if d["id"] == did), None)
+        if d is None:
+            raise HTTPException(404, "no such draft")
+        db.decide_draft(did, d["account"], "dismissed", clock.time())
+        db.bump()
+        return {"id": did, "status": "dismissed"}
     finally:
         db.close()
 

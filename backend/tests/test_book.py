@@ -158,8 +158,8 @@ def of(q, kind):
 def test_q4_renewal(db):
     a, b = (load4(db)[k]["q4"] for k in "AB")
     ra, rb = of(a, "renewal")[0], of(b, "renewal")[0]
-    assert rb["level"] == "red" and rb["deal"] == "b_renewal" and rb["days_left"] == 78
-    assert ra["level"] == "amber" and ra["turns_bad_on"] == "2026-11-30" and ra["days_left"] == 106
+    assert rb["level"] == "red" and rb["deal"] == "b_renewal" and rb["days_left"] == 74
+    assert ra["level"] == "amber" and ra["turns_bad_on"] == "2026-11-30" and ra["days_left"] == 102
     assert {"id": "A/contract.txt", "kind": "record"} in ra["receipts"]
     assert [i["level"] for i in b["items"]][0] == "red"  # red sorts first
 
@@ -167,9 +167,9 @@ def test_q4_renewal(db):
 def test_q4_cold_stuck_usage(db):
     a, b = (load4(db)[k]["q4"] for k in "AB")
     cold = {i["who"]: i for i in of(a, "cold") + of(b, "cold")}
-    assert cold["Insp. Karen Mbeki"]["days_waiting"] == 95 and cold["Insp. Karen Mbeki"]["turns_bad_on"] == "2026-08-25"
+    assert cold["Insp. Karen Mbeki"]["days_waiting"] == 99 and cold["Insp. Karen Mbeki"]["turns_bad_on"] == "2026-08-25"
     assert cold["Insp. Karen Mbeki"]["receipts"][0]["id"] == "A/emails/2026-08-11_karen_batteries.txt"
-    assert next(i for k, i in cold.items() if k.startswith("Group Finance"))["days_waiting"] == 37
+    assert next(i for k, i in cold.items() if k.startswith("Group Finance"))["days_waiting"] == 41
     assert [i["ticket"] for i in of(a, "stuck") if "ticket" in i] == ["FB-10412"]
     assert any("b_idle" == i["deal"] and "no date" in i["text"] for i in of(b, "stuck"))
     assert any(i["deal"] == "b_renewal" and "Finance cannot verify" in i["text"] for i in of(b, "stuck"))
@@ -183,7 +183,7 @@ def test_q4_signals_keep_own_date(db):
     sg = {i["receipts"][0]["id"]: i for i in of(a, "signal")}
     assert sg["champion_leaves"]["dated"] == "2026-11-17" and sg["urgent_request"]["dated"] == "2026-11-18"
     assert {"id": "A/emails/2026-11-17_rhys_moving.txt", "kind": "record"} in sg["champion_leaves"]["receipts"]
-    assert of(b, "signal") == [] and a["today"] == "2026-11-14"
+    assert of(b, "signal") == [] and a["today"] == "2026-11-18"  # game today: newest record on file (signal dated 18 Nov)
 
 
 def test_q4_without_paperwork_or_signals(db):
@@ -199,14 +199,14 @@ def test_q5_gaps(db):
     a, b = (load4(db)[k]["q5"] for k in "AB")
     ga = {g["text"]: g for g in a["gaps"]}
     pa = ga["Any finance contact, at the alliance or at a force."]
-    assert pa["kind"] == "profile" and pa["who_could_fill"] == "not on file" and {"id": "A/profile.json", "kind": "record"} in pa["receipts"]
+    assert pa["kind"] == "profile" and pa["who_could_fill"] == "sam (CSM on this account 2026-05 to 2026-11)" and {"id": "A/profile.json", "kind": "record"} in pa["receipts"]
     assert any(g["kind"] == "unpriced" and g["deals"][0]["id"] == "a_tarn" and g["value_at_stake"] is None for g in a["gaps"])
     cl = next(g for g in a["gaps"] if g["kind"] == "claim")  # claim-only fact: the speaker is the person named in the record
     assert cl["who_could_fill"] and cl["receipts"][0]["kind"] == "fact"
     gb = [g for g in b["gaps"] if g["deals"] and g["deals"][0]["id"] == "b_idle" and g["kind"] == "deadline"]
     assert gb and gb[0]["deals"][0]["value"] == 180000 and gb[0]["value_at_stake"] == 180000
     assert any(g["kind"] == "file" and "plant 12" in g["text"] and "2026-08" in g["text"] for g in b["gaps"])
-    assert any(g["kind"] == "power" and g["text"].startswith("could_block") for g in a["gaps"])
+    assert any(g["kind"] == "power" and g["text"].startswith("Who could block") for g in a["gaps"])
 
 
 def test_q5_no_paperwork(db):
@@ -233,11 +233,12 @@ def test_q3_moves(db):
     mb, ma = b["moves"], a["moves"]
     assert [m["rank"] for m in mb] == [1, 2, 3] and len(ma) == 3
     assert mb[0]["deal"]["id"] == "b_renewal" and mb[0]["level"] == "red" and mb[0]["turns_bad_on"] == "2026-11-02"
-    assert mb[0]["due"] == "2026-11-17" and "already passed" in mb[0]["due_basis"]  # 2 business days from Sat 14 Nov
-    assert ma[0]["deal"]["id"] == "a_renewal" and ma[0]["due"] == "2026-11-20" and "held before 2026-11-30" in ma[0]["due_basis"]
+    assert mb[0]["due"] == "2026-11-18" and mb[0]["due_basis"] == "overdue: turned bad on 2026-11-02" and mb[0]["overdue_since"] == "2026-11-02"
+    assert ma[0]["deal"]["id"] == "a_renewal" and ma[0]["due"] == "2026-11-25" and "held before 2026-11-30" in ma[0]["due_basis"]
     assert all(m["owner"] == "the CSM (you)" and {"id": "A/profile.json", "kind": "record"} in m["receipts"] for m in ma)
     assert all(m["draft_note"]["kind"] == "next_step" and m["receipts"][0]["id"] in m["draft_note"]["text"] for m in ma + mb)
-    assert any(m["kind"] == "cold" and m["with"] == "Insp. Karen Mbeki" for m in ma)
+    assert [m["kind"] for m in ma] == ["renewal", "insight", "signal"] and ma[2]["action"] == "Respond to: Westmere needs an answer before a public event"
+    assert all(m["draft_note"]["title"] == m["action"][:120] for m in ma + mb)
 
 
 def test_q3_no_paperwork(db):
@@ -261,8 +262,8 @@ def test_radar_a_b(db):
     assert (rb["deadline"]["level"], rb["deadline"]["date"]) == ("red", "2026-11-02") and rb["deal"]["value"] == 140000
     assert ra["cold"]["level"] == "unknown" and ra["cold"]["label"] == "no named decider or payer"  # alliance office, Schedule 2
     c = rb["cold"]
-    assert c["level"] == "amber" and c["label"] == "Stefan Roy: no contact for 32 days" and c["date"] == "2026-11-13"
-    assert {"id": "B/calls/2026-10-13_check_in.txt", "kind": "record"} in c["receipts"]
+    assert c["level"] == "red" and c["label"] == "Stefan Roy: no reply 35 days" and c["date"] == "2026-10-28"  # our 14 Oct email, unanswered
+    assert {"id": "B/mail_log.json", "kind": "record"} in c["receipts"]
     assert [b[d]["blocked"]["level"] for d in ("b_renewal", "b_idle", "b_insurance", "b_sister")] == ["red", "red", "green", "red"]
     assert ra["blocked"] == {"level": "green", "label": "no blocker on record", "date": None, "receipts": [{"id": "a_renewal", "kind": "deal"}]}
     off = a["a_training"]
@@ -333,11 +334,11 @@ def test_paperwork_only_account_in_book_and_kept_live(db):
     assert [(l["id"], l["value"]) for l in oc] == [(None, 140000)] and {"id": "H/contract.txt", "kind": "record"} in oc[0]["receipts"]
     assert not any("enewal" in l["title"] for l in H["q1"]["bands"]["unbacked"])
     ren = [i for i in H["q4"]["items"] if i["kind"] == "renewal"]
-    assert [(i["deal"], i["level"], i["days_left"]) for i in ren] == [(None, "amber", 78)]
+    assert [(i["deal"], i["level"], i["days_left"]) for i in ren] == [(None, "amber", 74)]
     (row,) = H["radar"]["deals"]
     assert row["deal"]["kind"] == "contract" and row["deal"]["id"] is None
     assert (row["deadline"]["level"], row["deadline"]["date"]) == ("amber", "2027-01-31")
-    assert row["cold"]["level"] == "amber" and row["blocked"]["level"] == "unknown"
+    assert row["cold"]["level"] == "red" and row["blocked"]["level"] == "unknown"  # B's copy: our 14 Oct email to Stefan Roy unanswered
     (pm,) = H["power"]["deals"]
     d = pm["roles"]["decides"][0]
     assert (d["name"], d["id"], d["side"], d["relationship"]) == ("Stefan Roy", None, "customer", "not on file")

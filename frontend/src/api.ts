@@ -27,7 +27,7 @@ export type Q4 = { today: string; loaded: boolean; signals_loaded: boolean; item
 export type Move = {
   rank: number; kind: string; action: string; why_now: string; owner: string; with?: string; due: string; due_basis?: string
   turns_bad_on?: string; level?: 'red' | 'amber' | null; deal: { id: string; title: string } | null; receipts: Receipt[]
-  draft_note: { kind: string; text: string }
+  draft_note: { kind: string; text: string; title?: string }; overdue_since?: string | null
 }
 export type Q3 = { loaded: boolean; moves: Move[] }
 // risk radar: one row per deal, three dimensions, each a RAG cell. 'unknown' = not on file, never green.
@@ -44,7 +44,14 @@ export type PowerPerson = {
   basis: 'record' | 'inferred'; why?: string; waiting_on?: Waiting[]; receipts: Receipt[]
 }
 export type PowerDeal = { deal: { id: string | null; title: string; band: BandKey }; roles: Partial<Record<PowerRole, PowerPerson[]>>; gaps?: PowerRole[] }
-export type Account = { name: string | null; q1?: Q1; q2?: Q2; q3?: Q3; q4?: Q4; q5?: Q5; radar?: Radar; power?: { deals: PowerDeal[] } }
+// insights: one fixed rule over records, exact-key joins only; every number has its rows and receipts
+export type Tone = 'red' | 'amber' | 'good' | 'info'
+export type Insight = {
+  id: string; rule: string; account: string; tone: Tone; headline: string; method: string; window: string
+  rows: Record<string, unknown>[] | string[]; receipts: Receipt[]; series?: { week: string; flights: number | null }[]; missing_weeks?: string[]
+}
+export type Insights = { items: Insight[]; not_checked: string[] }
+export type Account = { name: string | null; q1?: Q1; q2?: Q2; q3?: Q3; q4?: Q4; q5?: Q5; insights?: Insights; radar?: Radar; power?: { deals: PowerDeal[] } }
 export type Gap = {
   kind: string; text: string; deals: { id: string; title: string; value: number | null; currency: string }[]
   value_at_stake: number | null; unpriced_deals: number; who_could_fill: string; receipts: Receipt[]
@@ -56,7 +63,7 @@ export type Changes = {
   new_deals: { account: string; deal: string; title: string; band: string }[]
   new_signals: { id: string; account?: string | null; title?: string | null; first_seen: number; receipts: Receipt[] }[]
 }
-export type Book = { as_of: string | null; state: string; accounts: Record<string, Account>; changes?: Changes }
+export type Book = { as_of: string | null; state: string; accounts: Record<string, Account>; changes?: Changes; today?: string; today_basis?: string }
 export type Health = {
   stale: boolean; last_good_poll: string | null; resync_at?: string | null; pending_calls?: number; now?: string; reachable?: boolean
   last_error?: { at: string | null; message: string } | null; changes?: number
@@ -65,6 +72,8 @@ export type Health = {
 export type Person = {
   id: string; account: string; name: string; title?: string | null; org?: string | null; side: 'customer' | 'flytbase'
   role_tags: string[]; standing?: string | null; deals: (string | { id: string; title?: string; role?: string })[]; receipts: Receipt[]
+  last_contact?: { date: string; days: number } | null; sign_ins_90?: number | null; last_sign_in?: string | null
+  signals?: { id: string; title?: string | null; dated?: string | null }[]
 }
 export type ActivityKind = 'email' | 'call' | 'request' | 'ticket' | 'signal' | 'invoice'
 export type ActivityItem = {
@@ -73,8 +82,13 @@ export type ActivityItem = {
 }
 export type NoteStatus = 'queued' | 'saved' | 'failed'
 export type Note = {
-  id: string | number; account: string; deal?: string | null; text: string; status: NoteStatus
-  created_at?: string | null; saved_at?: string | null; error?: string | null
+  id: string | number; account: string; deal?: string | null; text: string; status: NoteStatus; title?: string | null; kind?: string
+  created_at?: string | number | null; saved_at?: string | number | null; error?: string | null
+}
+// automation: a draft risk note for each red or amber risk; sent only when approved
+export type Draft = {
+  id: string; account: string; kind: string; level: 'red' | 'amber'; deal: string | null; title: string; text: string; receipts: Receipt[]
+  decision: { status: 'approved' | 'dismissed'; note_id: number | null; decided_at: number } | null
 }
 
 /** Shared by every page: the one book, health, and the account filter. */
@@ -202,8 +216,13 @@ export function useApi<T>(url: string | null, every?: number): Api<T> {
   return { ...r, reload: useCallback(() => setN(x => x + 1), []) }
 }
 
-export async function postNote(n: { account: string; deal?: string | null; text: string; source?: string }): Promise<{ id: string | number; status: NoteStatus }> {
+export async function postNote(n: { account: string; deal?: string | null; text: string; source?: string; title?: string; kind?: string; draft?: string }): Promise<{ id: string | number; status: NoteStatus }> {
   const r = await fetch('/api/notes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(n) })
   if (!r.ok) throw new Error(r.status === 404 ? 'Saving notes is not available yet' : `Save failed (${r.status})`)
   return r.json()
+}
+
+export async function dismissDraft(id: string): Promise<void> {
+  const r = await fetch(`/api/drafts/${encodeURIComponent(id)}/dismiss`, { method: 'POST' })
+  if (!r.ok) throw new Error(`Dismiss failed (${r.status})`)
 }

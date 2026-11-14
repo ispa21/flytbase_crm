@@ -6,6 +6,7 @@ import logging
 import re
 from datetime import date, datetime, timedelta, timezone
 
+from .records import game_today, merged
 from .sync import account_ids
 
 log = logging.getLogger("aq.book")
@@ -366,6 +367,7 @@ def _account_q2(acc, files, paperwork, file_text):
     gaps = [{"deal": d["deal"], "role": r, "why": c["gap"]} for d in deals for r, c in d["roles"].items() if c["status"] == "gap"]
     gaps += [{"deal": d["deal"], "role": r, "why": e["gap"]} for d in deals for r, c in d["roles"].items() for e in c["entries"] if e.get("gap")]
     return {"loaded": paperwork is not None, "deals": deals, "flight_log": log, "gaps": gaps,
+            "account_wide": ["decides", "pays", "uses"],  # the same contract signer, payer and logins sit on every deal
             "contract": {"decides": _cell(dec), "pays": _cell(pays), "uses": _cell(uses)}}  # account-wide, for a renewal with no deal
 
 
@@ -377,9 +379,10 @@ def _iso(t):
 # ---- Q4: what is about to go wrong (story 4.1) ----
 NA = "not on file"
 RED_DAYS, AMBER_DAYS, COLD_DAYS = 90, 120, 14
+NEW_SIGNAL_DAYS = 7  # q3: a signal this recent ranks with the amber renewal
 
 
-def _account_q4(acc, files, paperwork, file_text, signals, today):
+def _account_q4(acc, files, paperwork, file_text, signals, today, ins=None):
     aid = acc["id"]
     recs = {r["path"]: r for r in (paperwork or {}).get("records") or []}
     data = lambda p: (recs.get(p) or {}).get("data") or {}  # noqa: E731
@@ -432,6 +435,28 @@ def _account_q4(acc, files, paperwork, file_text, signals, today):
                     [rr(p)] + ([{"id": s["id"], "kind": "stakeholder"}] if s else []),
                     turns=(date.fromisoformat(d) + timedelta(days=COLD_DAYS)).isoformat(), days_waiting=waited, dated=d, who=who)
 
+    # going cold, the other way: our email the customer never answered (mail_log note), latest per recipient
+    last_unanswered = {}
+    for m in data("mail_log.json").get("mail") or []:
+        d = m.get("date") or ""
+        if "no reply" in (m.get("note") or "").lower() and "(FlytBase)" in (m.get("from") or "") and re.fullmatch(r"\d{4}-\d{2}-\d{2}", d):
+            to = m.get("to") or "the customer"
+            if d > last_unanswered.get(to, {}).get("date", ""):
+                last_unanswered[to] = m
+    from .views import _Paper
+    paper = _Paper(acc, paperwork)
+    for to, m in last_unanswered.items():
+        waited = (today - date.fromisoformat(m["date"])).days
+        heard, _ = paper.last_contact(to, (stak.get(to) or {}).get("id"))
+        if heard and heard.isoformat() > m["date"]:  # they have been in touch since: the email went unanswered, the person did not go cold
+            continue
+        if waited > COLD_DAYS:
+            s = stak.get(to)
+            add("cold", f"{to}: no reply to our email of {m['date']} ({m.get('subject')}), {waited} days",
+                [rr("mail_log.json")] + ([{"id": s["id"], "kind": "stakeholder"}] if s else []),
+                turns=(date.fromisoformat(m["date"]) + timedelta(days=COLD_DAYS)).isoformat(), days_waiting=waited,
+                dated=m["date"], who=to, ours=True, subject=m.get("subject"))
+
     # stuck: open blocker, open ticket with no owner, deadline with no date
     dl_text = set()
     for o in acc.get("opportunities") or []:
@@ -472,14 +497,46 @@ def _account_q4(acc, files, paperwork, file_text, signals, today):
     for s in signals or []:
         if s.get("account") == aid and s.get("id"):
             add("signal", f"{s['title']}: {s['summary']}", [{"id": s["id"], "kind": "signal"}] +
-                [{"id": r["path"], "kind": "record"} for r in s.get("records") or [] if r.get("path")], dated=s.get("dated"))
+                [{"id": r["path"], "kind": "record"} for r in s.get("records") or [] if r.get("path")], dated=s.get("dated"),
+                title=(s.get("title") or "").split(": ", 1)[-1])  # signal titles lead with the account name
+
+    # insights with a clear "what goes wrong": idle docks, unstable connections, quiet logins, promises not kept
+    from .insights import risk_items
+    items += risk_items(ins) if ins else []
     items.sort(key=lambda i: {"red": 0, "amber": 1}.get(i["level"], 2))
     return {"today": today.isoformat(), "loaded": paperwork is not None, "signals_loaded": signals is not None,
             "items": items, "gaps": gaps}
 
 
 # ---- Q5: what we still do not know (story 5.1) ----
-def _account_q5(acc, q1, q2, q4, paperwork):
+_DAY = re.compile(r"\b(\d{1,2}) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* (\d{4})\b")
+
+
+def _who_could_fill(gaps, aid, paperwork, team):
+    """Fill "not on file" fillers from facts only: (1) the people on the call the gap's own text dates;
+    (2) else the previous CSM the profile names, with their dates. The basis is in the text."""
+    recs = {r["path"]: r for r in (paperwork or {}).get("records") or []}
+    calls = ((recs.get("calls_index.json") or {}).get("data") or {}).get("calls") or []
+    prof = (recs.get("profile.json") or {}).get("data") or {}
+    names = {p.get("id"): p.get("name") for p in team or [] if isinstance(p, dict)}
+    prev = [c for c in (prof.get("flytbase_side") or {}).get("csm") or [] if c.get("to") and c.get("who") != "you"]
+    prev = prev[-1] if prev else None
+    rr = lambda p: {"id": _rec(aid, p), "kind": "record"}  # noqa: E731
+    for g in gaps:
+        if g["who_could_fill"] != NA:
+            continue
+        m = _DAY.search(g["text"])
+        day = f"{m.group(3)}-{_MON[m.group(2).lower()]:02d}-{int(m.group(1)):02d}" if m else None
+        call = next((c for c in calls if day and c.get("date") == day), None)
+        if call and (call.get("customer") or call.get("flytbase")):
+            g["who_could_fill"] = f"{', '.join((call.get('customer') or []) + (call.get('flytbase') or []))} (on the call of {day})"
+            g["receipts"] = g["receipts"] + [rr("calls_index.json")] + ([rr(call["path"])] if call.get("path") else [])
+        elif prev:
+            g["who_could_fill"] = f"{names.get(prev['who']) or prev['who']} (CSM on this account {prev.get('from')} to {prev.get('to')})"
+            g["receipts"] = g["receipts"] + [rr("profile.json")]
+
+
+def _account_q5(acc, q1, q2, q4, paperwork, ins=None, team=None):
     """Gaps the plan rests on. Reuses the gaps q1/q2/q4 already found; adds profile.json not_on_file.
     Each gap: the deals it touches (with value), who could fill it (a name a record gives, else "not on file")."""
     aid = acc["id"]
@@ -501,8 +558,10 @@ def _account_q5(acc, q1, q2, q4, paperwork):
         hit = [i for i, o in opps.items() if g & _gate(o["title"] + " " + ((o.get("blocker") or {}).get("text") or ""))]
         gap("profile", t, hit, [{"id": _rec(aid, "profile.json"), "kind": "record"}] + [{"id": i, "kind": "deal"} for i in hit],
             next((n for n in names if n in t), None))
+    role = {"decides": "Who decides", "pays": "Who pays", "uses": "Who uses it", "could_block": "Who could block"}
     for g in q2["gaps"]:
-        gap("power", f"{g['role']}: {g['why']}", [g["deal"]], [{"id": g["deal"], "kind": "deal"}])
+        title = deals[g["deal"]]["title"] if g["deal"] in deals else g["deal"]
+        gap("power", f"{role.get(g['role'], g['role'])} on {title}: {g['why']}", [g["deal"]], [{"id": g["deal"], "kind": "deal"}])
     for b in q1["bands"]["unpriced"]:
         gap("unpriced", f"No value on file for {b['title']}", [b["id"]], [{"id": b["id"], "kind": "deal"}])
     for i in q4["items"]:
@@ -518,6 +577,9 @@ def _account_q5(acc, q1, q2, q4, paperwork):
         f = facts[c["claim"]["id"]]
         gap("claim", f"Only a claim, nothing backs it: {f['text']}", [i for i, o in opps.items() if f["id"] in (o.get("evidence") or [])],
             c["receipts"], f["said_by"])
+    for t in (ins or {}).get("not_checked") or []:
+        gap("record", f"Not checked: {t}", [], [])
+    _who_could_fill(gaps, aid, paperwork, team)
     return {"loaded": paperwork is not None, "gaps": gaps}
 
 
@@ -529,7 +591,7 @@ def _add_bdays(d, n):
     return d
 
 
-def _account_q3(acc, q1, q2, q4, q5, paperwork, today):
+def _account_q3(acc, q1, q2, q4, q5, paperwork, today, ins=None):
     """Top 3 moves by plain rules over q1/q2/q4/q5 output. Owner = the CSM profile.json names (no `to`), else "not on file".
     Due = 2 (red) or 5 (else) business days out, held before the turn date when that is still ahead. Nothing invented."""
     aid = acc["id"]
@@ -540,10 +602,14 @@ def _account_q3(acc, q1, q2, q4, q5, paperwork, today):
     deals = {l["id"]: (l["title"], rank) for rank, b in enumerate(q1["bands"].values()) for l in b if l["id"]}
     cands = []
 
-    def cand(tier, kind, action, why, receipts, deal=None, turns=NA, level=None, with_=NA):
+    def cand(tier, kind, action, why, receipts, deal=None, turns=NA, level=None, with_=NA, dated=""):
+        # rank: tier, then the band of the deal, then the earliest turn date, then red before amber, then the newest record
+        newest = -int((dated or "0000-00-00").replace("-", "")) if re.fullmatch(r"\d{4}-\d{2}-\d{2}", dated or "") else 0
         cands.append({"tier": tier, "kind": kind, "action": action, "why_now": why, "receipts": receipts + orec, "level": level,
                       "deal": {"id": deal, "title": deals[deal][0]} if deal in deals else None, "turns_bad_on": turns, "with": with_,
-                      "_k": (tier, deals[deal][1] if deal in deals else 9, turns if turns[:1].isdigit() else "9999")})
+                      "_k": (tier, deals[deal][1] if deal in deals else 0 if kind == "renewal" else 9,  # a contract renewal with no deal id is on contract
+                             turns if turns[:1].isdigit() else "9999",
+                             {"red": 0, "amber": 1}.get(level, 2), newest)})
 
     for i in q4["items"]:
         d, t, k = i["deal"], i["turns_bad_on"], i["kind"]
@@ -551,14 +617,22 @@ def _account_q3(acc, q1, q2, q4, q5, paperwork, today):
         if k == "renewal":
             cand(0 if i["level"] == "red" else 1, k, f"Clear what blocks {title or 'the contract renewal'}: name the signer or settle the open blocker", i["text"],
                  i["receipts"], d, t, i["level"])
+        elif k == "cold" and i.get("ours"):
+            cand(2, k, f"Follow up with {i['who']} on \"{i.get('subject')}\"", i["text"], i["receipts"], None, t, with_=i["who"])
         elif k == "cold":
             cand(2, k, f"Reply to {i['who']}", i["text"], i["receipts"], None, t, with_=i["who"])
+        elif k == "insight":
+            from .insights import move_action
+            src = next((x for x in (ins or {}).get("items") or [] if x["rule"] == i["rule"]), None)
+            if src:
+                cand(1 if i["level"] == "red" else 2, k, move_action(i["rule"], src), i["text"], i["receipts"], None, t, i["level"])
         elif k == "stuck" and i.get("ticket"):
             cand(2, k, f"Assign an owner to {i['ticket']}", i["text"], i["receipts"], None, t)
         elif k == "stuck" and i["text"].startswith("Open blocker") and not any(x["deal"] == d and x["kind"] == "renewal" for x in q4["items"]):  # renewal move already covers it
             cand(2, k, f"Clear the blocker on {title}", i["text"], i["receipts"], d, t)
-        elif k == "signal":
-            cand(2, k, f"Respond to: {i['text'].split(':')[0]}", i["text"], i["receipts"], None, t)
+        elif k == "signal":  # a signal from the last week is the customer acting now: tier 1
+            fresh = bool(i.get("dated")) and 0 <= (today - date.fromisoformat(i["dated"])).days <= NEW_SIGNAL_DAYS
+            cand(1 if fresh else 2, k, f"Respond to: {i.get('title') or i['text'].split(': ')[0]}", i["text"], i["receipts"], None, t, dated=i.get("dated") or "")
     seen = set()  # at most one find-out move per deal: the first gap listed for it
     for g in q5["gaps"]:
         if g["deals"] and g["value_at_stake"] is not None and g["deals"][0]["id"] not in seen:  # only gaps that sit on priced deals
@@ -571,45 +645,54 @@ def _account_q3(acc, q1, q2, q4, q5, paperwork, today):
     for n, c in enumerate(sorted(cands, key=lambda c: c["_k"])[:3], start=1):
         due = _add_bdays(today, 2 if c["level"] == "red" else 5)
         basis = "2 business days (red)" if c["level"] == "red" else "5 business days"
+        overdue = None
         if c["turns_bad_on"][:1].isdigit() and date.fromisoformat(c["turns_bad_on"]) > today:
             due, basis = min(due, date.fromisoformat(c["turns_bad_on"]) - timedelta(days=1)), f"{basis}, held before {c['turns_bad_on']}"
-        elif c["turns_bad_on"][:1].isdigit():
-            basis += f"; turn date {c['turns_bad_on']} already passed"
+        elif c["turns_bad_on"][:1].isdigit():  # already bad: do it today
+            due, basis, overdue = today, f"overdue: turned bad on {c['turns_bad_on']}", c["turns_bad_on"]
         else:
             basis += "; no turn date on file"
         due = max(due, today)
         m = {k: v for k, v in c.items() if k not in ("tier", "_k")}
-        m.update(rank=n, owner=owner, due=due.isoformat(), due_basis=basis)
-        ids = ", ".join(r["id"] for r in m["receipts"])
-        m["draft_note"] = {"kind": "next_step", "text": f"Next step: {m['action']}. Owner: {owner}. Due: {m['due']} ({basis}). "
-                           f"Deal: {m['deal']['id'] if m['deal'] else NA}. Why now: {m['why_now']}. Records: {ids}."}
+        m.update(rank=n, owner=owner, due=due.isoformat(), due_basis=basis, overdue_since=overdue)
         out.append(m)
     return {"loaded": paperwork is not None, "moves": out, "candidates": len(cands)}
 
 
-def band_deals(my_accounts, paperwork_by_acc, strict=False, file_text=None, signals=None, today=None):
-    """-> {account id: {q1, q2, q3, q4, q5, radar, power}}. Receipts are checked against the same snapshots."""
+def _draft_notes(q3):
+    """The note each move would save. Built after the receipt check, so it never names a dropped id."""
+    for m in q3["moves"]:
+        ids = ", ".join(r["id"] for r in m["receipts"])
+        m["draft_note"] = {"kind": "next_step", "title": m["action"][:120],
+                           "text": f"Next step: {m['action']}. Owner: {m['owner']}. Due: {m['due']} ({m['due_basis']}). "
+                                   f"Deal: {m['deal']['id'] if m['deal'] else NA}. Why now: {m['why_now']}. Records: {ids}."}
+
+
+def band_deals(my_accounts, paperwork_by_acc, strict=False, file_text=None, signals=None, today=None, team=None):
+    """-> {account id: {q1, q2, q3, q4, q5, insights, radar, power}}. Receipts are checked against the same snapshots.
+    Paperwork is read with the records signals brought since (records.merged)."""
+    from .insights import account_insights
     from .views import power, radar, settle  # views builds on this module's helpers
     out = {}
     today = today or date.today()
     files = my_accounts.get("files") or []
     for acc in my_accounts.get("accounts") or []:
         pw = paperwork_by_acc.get(acc["id"])
+        pw = merged(pw, signals, acc["id"]) if pw is not None else None
+        ins = account_insights(acc, pw, today) if pw is not None else {"items": [], "not_checked": ["paperwork not loaded: insights not run"]}
         q1 = _account_q1(acc, files, pw)
         q2 = _account_q2(acc, files, pw, file_text)
-        q4 = _account_q4(acc, files, pw, file_text, signals, today)
-        q5 = _account_q5(acc, q1, q2, q4, pw)
-        q3 = _account_q3(acc, q1, q2, q4, q5, pw, today)
+        q4 = _account_q4(acc, files, pw, file_text, signals, today, ins)
+        q5 = _account_q5(acc, q1, q2, q4, pw, ins, team)
+        q3 = _account_q3(acc, q1, q2, q4, q5, pw, today, ins)
         known = _known({**acc, "_files": files, "_signals": signals}, pw)
-        check_receipts(q1, known, strict)
-        check_receipts(q2, known, strict)
-        check_receipts(q4, known, strict)
-        check_receipts(q5, known, strict)
-        check_receipts(q3, known, strict)
+        for q in (q1, q2, q4, q5, q3, ins):
+            check_receipts(q, known, strict)
+        _draft_notes(q3)
         rd, pm = radar(acc, q1, q2, q4, pw, today), power(acc, q1, q2, pw)
         check_receipts(rd, known, strict)
         check_receipts(pm, known, strict)
-        out[acc["id"]] = {"q1": q1, "q2": q2, "q3": q3, "q4": q4, "q5": q5, "radar": settle(rd), "power": pm,
+        out[acc["id"]] = {"q1": q1, "q2": q2, "q3": q3, "q4": q4, "q5": q5, "insights": ins, "radar": settle(rd), "power": pm,
                           "name": acc.get("name"), "in_export": not acc.get("paperwork_only")}
     return out
 
@@ -641,8 +724,13 @@ def build_book(db, strict=False, today=None, at=None):
     signals = sg[0].get("signals") or [] if sg and isinstance(sg[0], dict) else None
     if sg:
         times.append(sg[1])
+    tm = get("get_flytbase_team")
+    team = (tm[0].get("people") or []) if tm and isinstance(tm[0], dict) else []
+    # the game runs ahead of the server clock: count days from the newest record on file (decision with the user)
+    today, basis = game_today(today or date.today(), [merged(p, signals, a) for a, p in pw.items()], signals)
     return {"as_of": datetime.fromtimestamp(min(times), timezone.utc).isoformat(),  # oldest input = honest freshness
-            "state": "ok", "accounts": band_deals({**ma[0], "accounts": accs}, pw, strict, ft, signals, today)}
+            "today": today.isoformat(), "today_basis": basis,
+            "state": "ok", "accounts": band_deals({**ma[0], "accounts": accs}, pw, strict, ft, signals, today, team)}
 
 
 # ---- What Changed (story 7.1, minimal): new signals and deal band / stage / value moves ----

@@ -5,25 +5,27 @@ import { DataCtx, useApi, useBook, useData, type ActivityItem, type Person } fro
 import { AccountsPage } from './accounts'
 import { Home } from './home'
 import { Ago, ToastHost, toast } from './live'
-import { ActivityPage, DealPage, DealsPage, MovesPage, NotesPage, PeoplePage, SyncPage, dealHref } from './pages'
+import { ActivityPage, DealPage, DealsPage, PeoplePage, RisksPage, SyncPage, TasksPage, dealHref } from './pages'
+import { InsightsPage } from './insights'
 import { PowerPage } from './power'
-import { RadarPage } from './radar'
 import { Failed, Icon, bandName, dealsOf, shortName, when } from './ui'
 
 export { money } from './ui'
 
+// One entry per question, then the records. Shortcuts: only ⌘K (Ctrl+K), then type.
 const NAV = [
-  { path: 'home', label: 'Home', icon: 'home', key: 'h' },
-  { path: 'accounts', label: 'Accounts', icon: 'accounts', key: 'c' },
-  { path: 'deals', label: 'Deals', icon: 'deals', key: 'd' },
-  { path: 'radar', label: 'Risk radar', icon: 'radar', key: 'r' },
-  { path: 'power', label: 'Power map', icon: 'power', key: 'w' },
-  { path: 'people', label: 'People', icon: 'people', key: 'p' },
-  { path: 'activity', label: 'Activity', icon: 'activity', key: 'a' },
-  { path: 'moves', label: 'Moves', icon: 'moves', key: 'm' },
-  { path: 'notes', label: 'Notes', icon: 'notes', key: 'n' },
-  { path: 'sync', label: 'Sync', icon: 'sync', key: 's' },
+  { path: 'home', label: 'Home', icon: 'home' },
+  { path: 'accounts', label: 'Accounts', icon: 'accounts' },
+  { path: 'deals', label: 'Pipeline', icon: 'deals' },
+  { path: 'power', label: 'Power map', icon: 'power' },
+  { path: 'tasks', label: 'Tasks', icon: 'moves' },
+  { path: 'radar', label: 'Risks & gaps', icon: 'radar' },
+  { path: 'insights', label: 'Insights', icon: 'info' },
+  { path: 'people', label: 'People', icon: 'people' },
+  { path: 'activity', label: 'Activity', icon: 'activity' },
 ]
+const SYNC = { path: 'sync', label: 'Data & sync', icon: 'sync' }
+const TITLE: Record<string, string> = { ...Object.fromEntries([...NAV, SYNC].map(n => [n.path, n.label])), moves: 'Tasks', notes: 'Tasks' }
 const go = (path: string) => { window.location.hash = `#/${path === 'home' ? '' : path}` }
 
 function useHash() {
@@ -43,8 +45,8 @@ function useTheme() {
 }
 
 // ---------- command palette + global search ----------
-type Hit = { key: string; group: string; label: string; sub?: string; to: string }
-function Palette({ open, setOpen }: { open: boolean; setOpen: (o: boolean) => void }) {
+type Hit = { key: string; group: string; label: string; sub?: string; to?: string; run?: () => void }
+function Palette({ open, setOpen, actions }: { open: boolean; setOpen: (o: boolean) => void; actions: Hit[] }) {
   const { book, names } = useData()
   const ppl = useApi<{ people: Person[] }>(open ? '/api/people' : null)
   const act = useApi<{ items: ActivityItem[] }>(open ? '/api/activity' : null)
@@ -52,17 +54,18 @@ function Palette({ open, setOpen }: { open: boolean; setOpen: (o: boolean) => vo
   useEffect(() => { if (open) { setQ(''); setI(0) } }, [open])
   const hits = useMemo<Hit[]>(() => {
     const s = q.trim().toLowerCase()
-    const pages: Hit[] = NAV.map(n => ({ key: `p${n.path}`, group: 'Go to', label: n.label, to: n.path }))
-    if (!s) return pages
+    const pages: Hit[] = [...NAV, SYNC].map(n => ({ key: `p${n.path}`, group: 'Go to', label: n.label, to: n.path }))
+    if (!s) return [...pages, ...actions]
     const has = (...v: (string | null | undefined)[]) => v.join(' ').toLowerCase().includes(s)
     return [
       ...pages.filter(p => has(p.label)),
+      ...actions.filter(a => has(a.label, a.sub)),
       ...dealsOf(book).filter(d => has(d.title, d.id)).slice(0, 6).map(d => ({ key: `d${d.acct}${d.key}`, group: 'Deals', label: d.title, sub: `${names[d.acct] ?? d.acct} · ${bandName(d.band)}`, to: dealHref(d).slice(2) })),
       ...(ppl.data?.people ?? []).filter(p => has(p.name, p.title, p.org)).slice(0, 5).map(p => ({ key: `u${p.id}`, group: 'People', label: p.name, sub: `${names[p.account] ?? p.account} · ${p.title ?? p.org ?? ''}`, to: 'people' })),
       ...(act.data?.items ?? []).filter(a => has(a.title, a.summary)).slice(0, 5).map(a => ({ key: `a${a.id}`, group: 'Activity', label: a.title, sub: `${a.kind} · ${names[a.account] ?? a.account}`, to: 'activity' })),
     ]
-  }, [q, book, names, ppl.data, act.data])
-  const pick = (h?: Hit) => { if (!h) return; setOpen(false); go(h.to) }
+  }, [q, book, names, ppl.data, act.data, actions])
+  const pick = (h?: Hit) => { if (!h) return; setOpen(false); if (h.run) h.run(); else if (h.to) go(h.to) }
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); setI(x => Math.min(x + 1, hits.length - 1)) }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setI(x => Math.max(x - 1, 0)) }
@@ -76,7 +79,7 @@ function Palette({ open, setOpen }: { open: boolean; setOpen: (o: boolean) => vo
           <Dialog.Title className="sr-only">Search and commands</Dialog.Title>
           <div className="palette-in"><Icon n="search" />
             <input autoFocus role="combobox" aria-expanded="true" aria-controls="palette-list" aria-activedescendant={hits[i] ? `opt-${hits[i].key}` : undefined}
-              aria-label="Search deals, people, activity" placeholder="Search deals, people, activity, or jump to a page" value={q} onChange={e => { setQ(e.target.value); setI(0) }} onKeyDown={onKey} /></div>
+              aria-label="Search deals, people, activity" placeholder="Type a page, deal, person or action (resync, dark mode)" value={q} onChange={e => { setQ(e.target.value); setI(0) }} onKeyDown={onKey} /></div>
           <ul id="palette-list" role="listbox" className="palette-list">
             {hits.map((h, n) => (
               <li key={h.key} id={`opt-${h.key}`} role="option" aria-selected={n === i} className={n === i ? 'on' : ''} onMouseMove={() => setI(n)} onClick={() => pick(h)}>
@@ -123,26 +126,16 @@ export default function App() {
   const [palette, setPalette] = useState(false)
   const [nav, setNav] = useState(false)
   const [note, setNote] = useState('')
-  const gPending = useRef(0)
   useEffect(() => { setNote(changed.size ? `${changed.size} ${changed.size === 1 ? 'item' : 'items'} changed` : '') }, [changed])
   const seenN = useRef(0)
   useEffect(() => { if (changed.size > seenN.current) toast(`${changed.size} ${changed.size === 1 ? 'item' : 'items'} changed since the last sync`); seenN.current = changed.size }, [changed])
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPalette(o => !o); return }
-      const el = e.target as HTMLElement
-      if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable) return
-      if (e.key === 'g') { gPending.current = Date.now(); return }
-      if (Date.now() - gPending.current < 1200) {
-        const t = NAV.find(n => n.key === e.key)
-        gPending.current = 0
-        if (t) go(t.path)
-      }
-    }
+    const onKey = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPalette(o => !o) } }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
   useEffect(() => { setNav(false); document.getElementById('main')?.focus({ preventScroll: true }) }, [parts.join('/')])
+  useEffect(() => { document.title = `${TITLE[parts[0] ?? 'home'] ?? 'Home'} · FlytBase CRM` }, [parts])
 
   const asOf = when(book?.as_of ?? null)
   const accounts = Object.entries(book?.accounts ?? {})
@@ -158,21 +151,29 @@ export default function App() {
   const route = parts[0] ?? 'home'
   const ctx = { book, health, unreachable, account, mcpDown, names, asOf: book?.as_of ?? null }
 
-  const links = (cls: string) => NAV.map(n => (
-    <a key={n.path} href={`#/${n.path === 'home' ? '' : n.path}`} className={`${cls}${route === n.path ? ' active' : ''}`} aria-current={route === n.path ? 'page' : undefined}>
-      <Icon n={n.icon} /><span>{n.label}</span><kbd className="hint">g {n.key}</kbd>
-    </a>))
+  const here = route === 'moves' || route === 'notes' ? 'tasks' : route
+  const link = (n: { path: string; label: string; icon: string }, cls = 'nav-link') => (
+    <a key={n.path} href={`#/${n.path === 'home' ? '' : n.path}`} className={`${cls}${here === n.path ? ' active' : ''}`} aria-current={here === n.path ? 'page' : undefined}>
+      <Icon n={n.icon} /><span>{n.label}</span>
+    </a>)
+  const links = () => NAV.map(n => link(n))
+  const actions: Hit[] = [
+    { key: 'x-resync', group: 'Action', label: 'Resync now', sub: '1 MCP call a minute', run: resync },
+    { key: 'x-theme', group: 'Action', label: theme === 'dark' ? 'Light mode' : 'Dark mode', sub: 'theme', run: toggleTheme },
+    { key: 'x-api', group: 'Action', label: 'API docs', sub: 'every JSON endpoint', run: () => window.open('/docs', '_blank', 'noopener') },
+  ]
 
   let page
   if (route === 'deals' && parts[1] && parts[2]) page = <DealPage acct={parts[1]} k={parts[2]} />
   else if (route === 'accounts') page = <AccountsPage route={parts} />
   else if (route === 'deals') page = <DealsPage />
-  else if (route === 'radar') page = <RadarPage />
+  else if (route === 'radar') page = <RisksPage />
   else if (route === 'power') page = <PowerPage key={parts.join('/')} route={parts} />
   else if (route === 'people') page = <PeoplePage />
   else if (route === 'activity') page = <ActivityPage />
-  else if (route === 'moves') page = <MovesPage />
-  else if (route === 'notes') page = <NotesPage />
+  else if (route === 'insights') page = <InsightsPage />
+  else if (route === 'tasks' || route === 'moves') page = <TasksPage tab={parts[1]} />
+  else if (route === 'notes') page = <TasksPage tab="saved" />
   else if (route === 'sync') page = <SyncPage health={health} progress={progress} resync={resync} resyncing={resyncing} resyncError={resyncError} />
   else if (!book && unreachable) page = <Failed what="the book" />
   else page = <Home book={book} changed={changed} names={names} markSeen={markSeen} account={account} />
@@ -183,8 +184,8 @@ export default function App() {
         <a className="skip" href="#main" onClick={e => { e.preventDefault(); document.getElementById('main')?.focus() }}>Skip to content</a>
         <aside className="side" aria-label="Primary">
           <div className="brand" aria-hidden="true"><Icon n="radar" size={20} /></div>
-          <nav className="nav">{links('nav-link')}</nav>
-          <p className="side-foot muted small"><kbd>g</kbd> + key to jump · <kbd>⌘K</kbd> search</p>
+          <nav className="nav">{links()}</nav>
+          <div className="side-foot">{link(SYNC)}<p className="muted small"><kbd>⌘K</kbd> to search or jump</p></div>
         </aside>
         <div className="content">
           <header className={`bar${banner ? ' stale' : ''}`}>
@@ -200,11 +201,11 @@ export default function App() {
                 <option value="all">All accounts</option>
                 {accounts.map(([id]) => <option key={id} value={id}>{names[id]}</option>)}
               </select>)}
-            <span className="viewing" role="status">Viewing: <b>{account === 'all' ? 'All accounts' : names[account] ?? account}</b></span>
-            <span className="chip" title={book?.as_of ?? undefined}><i className="dot" aria-hidden="true" />{banner ? `Stale${asOf ? ` · as of ${asOf}` : ''}` : asOf ? `As of ${asOf} · live` : 'Waiting for first sync'}{!banner && asOf && <Ago iso={health?.last_good_poll} />}</span>
+            <span className="chip" title={[book?.as_of && `Data as of ${book.as_of}`, book?.today && `Dates counted from ${book.today} (${book.today_basis ?? 'server date'})`].filter(Boolean).join('\n') || undefined}>
+              <i className="dot" aria-hidden="true" />{banner ? `Stale${asOf ? ` · as of ${asOf}` : ''}` : asOf ? <><span className="wide-only">As of {asOf} · </span>live</> : 'Waiting for first sync'}{!banner && asOf && <Ago iso={health?.last_good_poll} />}</span>
             <Bell onSeen={markSeen} />
             <button type="button" className="icon-btn" onClick={toggleTheme} aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}><Icon n={theme === 'dark' ? 'sun' : 'moon'} /></button>
-            <button type="button" className="btn resync" onClick={resync} disabled={resyncing}>{resyncing ? 'Resyncing…' : 'Resync now'}</button>
+            <button type="button" className="btn resync" onClick={resync} disabled={resyncing} aria-label="Resync now"><Icon n="sync" size={16} /><span className="wide-only">{resyncing ? 'Resyncing…' : 'Resync now'}</span></button>
           </header>
           {banner && <div className="banner" role="alert">{banner}</div>}
           {route !== 'sync' && progress && <div className="banner info" role="status">{progress}</div>}
@@ -218,11 +219,11 @@ export default function App() {
             <Dialog.Backdrop className="scrim" />
             <Dialog.Popup className="drawer left">
               <div className="row between"><Dialog.Title className="drawer-title">Menu</Dialog.Title><Dialog.Close className="icon-btn" aria-label="Close navigation"><Icon n="close" /></Dialog.Close></div>
-              <nav className="nav">{links('nav-link')}</nav>
+              <nav className="nav">{links()}{link(SYNC)}</nav>
             </Dialog.Popup>
           </Dialog.Portal>
         </Dialog.Root>
-        <Palette open={palette} setOpen={setPalette} />
+        <Palette open={palette} setOpen={setPalette} actions={actions} />
       </div>
     </DataCtx.Provider>
   )

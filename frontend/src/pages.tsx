@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react'
 import { Dialog } from '@base-ui/react/dialog'
-import { postNote, useApi, useData, type ActivityItem, type ActivityKind, type Health, type Move, type Note, type NoteStatus, type Person, type Receipt } from './api'
+import { dismissDraft, postNote, useApi, useData, type ActivityItem, type ActivityKind, type Draft, type Health, type Move, type Note, type NoteStatus, type Person, type Receipt } from './api'
 import { PowerGrid, GapRow } from './home'
 import { toast } from './live'
 import { RiskTimeline, StandMeter } from './viz'
 import { PowerView } from './power'
-import { DIMS, RagChip } from './radar'
-import { Avatar, BandChip, BANDS, Empty, Failed, Icon, Loading, NotAvailable, NOT_ON_FILE, PageHead, Receipts, Stat, Tag, WorthInfo, allMoves, countLabel, dealHref, dealKey, dealValue, dealsOf, day, dueIn, riskLabel, todayOf, turns, uniq, when, type Deal } from './ui'
+import { DIMS, RagChip, RadarPage } from './radar'
+import { Avatar, BandChip, CsvButton, ids as rid, BANDS, Empty, Failed, Icon, Loading, NotAvailable, NOT_ON_FILE, PageHead, Receipts, Stat, Tag, WorthInfo, allMoves, countLabel, dealHref, dealKey, dealValue, dealsOf, day, dueIn, riskLabel, todayOf, turns, uniq, when, type Deal } from './ui'
 export { dealHref }
 
 const acctLabel = (names: Record<string, string>, id: string) => names[id] ?? id
@@ -18,8 +18,8 @@ export const StatusPill = ({ s }: { s: NoteStatus | 'saving' }) => (
 )
 const REASON = 'MCP unreachable: notes cannot be saved until the link is back.'
 
-function SaveBox({ account, deal, initial, kind, label, source, onSaved, rows = 6 }: {
-  account: string; deal?: string | null; initial: string; kind?: string; label: string; source?: string; onSaved?: () => void; rows?: number
+function SaveBox({ account, deal, initial, kind, label, source, title, draft, onSaved, rows = 6 }: {
+  account: string; deal?: string | null; initial: string; kind?: string; label: string; source?: string; title?: string; draft?: string; onSaved?: () => void; rows?: number
 }) {
   const { mcpDown, names } = useData()
   const [text, setText] = useState(initial)
@@ -28,7 +28,7 @@ function SaveBox({ account, deal, initial, kind, label, source, onSaved, rows = 
   const blocked = mcpDown ? REASON : !text.trim() ? 'Write the note first.' : null
   const save = async () => {
     setPhase('saving'); setErr(null)
-    try { const r = await postNote({ account, deal, text: text.trim(), source }); setPhase(r.status); onSaved?.(); toast(r.status === 'failed' ? 'Note could not be saved' : 'Note queued for the CRM', r.status === 'failed' ? 'bad' : 'ok') }
+    try { const r = await postNote({ account, deal, text: text.trim(), source, title, draft, kind: kind === 'next_step' || kind === 'risk' || kind === 'task' ? kind : undefined }); setPhase(r.status); onSaved?.(); toast(r.status === 'failed' ? 'Note could not be saved' : 'Note queued for the CRM', r.status === 'failed' ? 'bad' : 'ok') }
     catch (e) { setPhase('failed'); setErr(e instanceof Error ? e.message : 'Save failed'); toast('Note could not be saved', 'bad') }
   }
   return (
@@ -72,7 +72,7 @@ function MoveCard({ m, acct, onSaved }: { m: Move & { acct: string }; acct: stri
         {!open ? <button type="button" className="btn" aria-expanded={false} onClick={() => setOpen(true)}>Review note</button> : (
           <>
             <h3 className="label">Draft note for the CRM</h3>
-            <SaveBox account={acct} deal={m.deal?.id} initial={m.draft_note.text} kind={m.draft_note.kind} label="Approve and save to CRM" source="move" onSaved={onSaved} />
+            <SaveBox account={acct} deal={m.deal?.id} initial={m.draft_note.text} kind={m.draft_note.kind} title={m.draft_note.title} label="Approve and save to CRM" source="move" onSaved={onSaved} />
             <button type="button" className="btn ghost" onClick={() => setOpen(false)}>Close review</button>
           </>
         )}
@@ -81,22 +81,24 @@ function MoveCard({ m, acct, onSaved }: { m: Move & { acct: string }; acct: stri
   )
 }
 
-export function MovesPage() {
-  const { book, account, names, unreachable } = useData()
+const moveCsv = (book: NonNullable<ReturnType<typeof useData>['book']>, ids: string[], names: Record<string, string>) =>
+  ids.flatMap(id => allMoves(book, id)).map(m => ({ account: names[m.acct] ?? m.acct, rank: m.rank, action: m.action, owner: m.owner, due: m.due, deal: m.deal?.id ?? '', why_now: m.why_now, records: rid(m.receipts) }))
+
+function Moves() {
+  const { book, account, names } = useData()
   const notes = useApi<{ notes: Note[] }>('/api/notes')
-  if (!book) return unreachable ? <Failed what="moves" /> : <Loading />
+  if (!book) return <Loading />
   const ids = Object.keys(book.accounts).filter(id => sameAcct(account, id))
-  const mv = ids.flatMap(id => allMoves(book, id)), due = dueIn(mv, todayOf(book))
   return (
     <>
-      <PageHead title="Moves" sub={<><Stat n={mv.length} label={mv.length === 1 ? 'move' : 'moves'} /><Stat n={due.week} label="due this week" /><Stat n={due.late} label="late" tone="red" /></>} />
+      <div className="row"><CsvButton name="tasks" rows={() => moveCsv(book, ids, names)} /></div>
       {ids.map(id => {
         const moves = allMoves(book, id)
         return (
           <section key={id} className="block" aria-label={acctLabel(names, id)}>
             <h2 className="block-h">{names[id] ?? id}</h2>
             {!book.accounts[id].q3 ? <Empty title="Moves are not computed yet">They appear after the next sync.</Empty>
-              : !moves.length ? <Empty title="No moves right now">Not an all-clear: check Not known.</Empty>
+              : !moves.length ? <Empty title="No moves right now">Not an all-clear: check Risks & gaps.</Empty>
               : <ol className="stack">{moves.map(m => <MoveCard key={m.rank} m={m} acct={id} onSaved={notes.reload} />)}</ol>}
           </section>
         )
@@ -105,33 +107,105 @@ export function MovesPage() {
   )
 }
 
-// ---------- Notes ----------
-export function NotesPage() {
+/** Automation: a draft risk note for every red or amber risk. Nothing is written until you approve. */
+function Drafts() {
+  const { account, names } = useData()
+  const { data, state, reload } = useApi<{ drafts: Draft[] }>('/api/drafts')
+  const [open, setOpen] = useState<string | null>(null)
+  if (state === 'loading') return <Loading />
+  if (state === 'na') return <NotAvailable what="Drafts" />
+  if (state === 'error') return <Failed what="drafts" retry={reload} />
+  const waiting = (data?.drafts ?? []).filter(d => !d.decision && sameAcct(account, d.account))
+  if (!waiting.length) return <Empty title="No drafts waiting">Every red or amber risk has been approved or dismissed.</Empty>
+  return (
+    <ul className="stack">{waiting.map(d => (
+      <li key={d.id} className="card note">
+        <div className="row between"><span className="muted small">{acctLabel(names, d.account)}{d.deal ? ` · ${d.deal}` : ''}</span><Tag level={d.level}>{d.level === 'red' ? 'Red' : 'Amber'}</Tag></div>
+        <p className="note-text"><b>{d.title}</b></p>
+        <Receipts rs={d.receipts} />
+        {open === d.id ? (
+          <SaveBox account={d.account} deal={d.deal} initial={d.text} kind="risk" title={d.title} draft={d.id} label="Approve and save to CRM" source="draft" onSaved={() => { setOpen(null); reload() }} />
+        ) : (
+          <div className="row">
+            <button type="button" className="btn primary" onClick={() => setOpen(d.id)}>Review and approve</button>
+            <button type="button" className="btn ghost" onClick={() => dismissDraft(d.id).then(reload).catch(() => toast('Could not dismiss', 'bad'))}>Dismiss</button>
+          </div>)}
+      </li>))}</ul>
+  )
+}
+
+function Saved() {
   const { account, names } = useData()
   const { data, state, reload } = useApi<{ notes: Note[] }>('/api/notes', 15_000)
   const [f, setF] = useState<'all' | NoteStatus>('all')
-  if (state === 'loading') return <><PageHead title="Notes" /><Loading /></>
-  if (state === 'na') return <><PageHead title="Notes" /><NotAvailable what="The notes history" /></>
-  if (state === 'error') return <><PageHead title="Notes" /><Failed what="notes" retry={reload} /></>
+  if (state === 'loading') return <Loading />
+  if (state === 'na') return <NotAvailable what="The notes history" />
+  if (state === 'error') return <Failed what="notes" retry={reload} />
   const mine = (data?.notes ?? []).filter(n => sameAcct(account, n.account))
   const notes = mine.filter(n => f === 'all' || n.status === f)
   const by = (s: NoteStatus) => mine.filter(n => n.status === s).length
   return (
     <>
-      <PageHead title="Notes" sub={<><Stat n={by('saved')} label="saved" /><Stat n={by('queued')} label="queued" tone="amber" /><Stat n={by('failed')} label="failed" tone="red" /></>}>
+      <div className="row"><Stat n={by('saved')} label="saved" /><Stat n={by('queued')} label="queued" tone="amber" /><Stat n={by('failed')} label="failed" tone="red" />
         <select aria-label="Status" value={f} onChange={e => setF(e.target.value as typeof f)}>
           <option value="all">All statuses</option><option value="queued">Queued</option><option value="saved">Saved</option><option value="failed">Failed</option>
         </select>
-      </PageHead>
-      {!notes.length ? <Empty title="No notes yet">Approve a draft on Moves, or write one on a deal.</Empty> : (
+        <CsvButton name="saved-notes" rows={() => notes.map(n => ({ account: names[n.account] ?? n.account, deal: n.deal ?? '', kind: n.kind ?? '', title: n.title ?? '', status: n.status, created: when(n.created_at) ?? '', text: n.text }))} />
+      </div>
+      {!notes.length ? <Empty title="No notes yet">Approve a task or a draft, or write a note on a deal.</Empty> : (
         <ul className="stack">{notes.map(n => (
           <li key={n.id} className="card note">
             <div className="row between"><span className="muted small">{acctLabel(names, n.account)}{n.deal ? ` · ${n.deal}` : ''} · created {when(n.created_at) ?? NOT_ON_FILE}</span><StatusPill s={n.status} /></div>
+            {n.title && <p className="note-text"><b>{n.title}</b></p>}
             <p className="note-text">{n.text}</p>
             {n.status === 'saved' && <p className="muted small">Saved to CRM {when(n.saved_at) ?? ''}</p>}
             {n.status === 'failed' && <p className="err small">{n.error ?? 'No reason recorded.'}</p>}
           </li>))}</ul>
       )}
+    </>
+  )
+}
+
+const TASK_TABS = [{ id: 'moves', label: 'To do' }, { id: 'drafts', label: 'Drafts waiting' }, { id: 'saved', label: 'Saved to CRM' }] as const
+export function TasksPage({ tab }: { tab?: string }) {
+  const { book, account, unreachable } = useData()
+  const t = TASK_TABS.some(x => x.id === tab) ? (tab as (typeof TASK_TABS)[number]['id']) : 'moves'
+  const drafts = useApi<{ drafts: Draft[] }>('/api/drafts')
+  if (!book) return unreachable ? <Failed what="tasks" /> : <><PageHead title="Tasks" /><Loading /></>
+  const mv = Object.keys(book.accounts).filter(id => sameAcct(account, id)).flatMap(id => allMoves(book, id)), due = dueIn(mv, todayOf(book))
+  const nd = (drafts.data?.drafts ?? []).filter(d => !d.decision && sameAcct(account, d.account)).length
+  return (
+    <>
+      <PageHead title="Tasks" sub={<><Stat n={mv.length} label={mv.length === 1 ? 'task' : 'tasks'} /><Stat n={due.week} label="due this week" /><Stat n={due.late} label="late" tone="red" /></>} />
+      <nav className="tabs" aria-label="Task sections">
+        {TASK_TABS.map(x => <a key={x.id} href={`#/tasks${x.id === 'moves' ? '' : `/${x.id}`}`} aria-current={t === x.id ? 'page' : undefined}>{x.label}{x.id === 'drafts' && nd > 0 && <span className="count">{nd}</span>}</a>)}
+      </nav>
+      {t === 'moves' && <Moves />}{t === 'drafts' && <Drafts />}{t === 'saved' && <Saved />}
+    </>
+  )
+}
+
+/** Risks & gaps: the radar, then what turns bad and when (q4), then what is not known and who could fill it (q5). */
+export function RisksPage() {
+  const { book, account, names } = useData()
+  const accs = Object.entries(book?.accounts ?? {}).filter(([id]) => sameAcct(account, id))
+  const risks = accs.flatMap(([id, a]) => (a.q4?.items ?? []).map(r => ({ ...r, acct: id })))
+    .sort((x, y) => ((x.level === 'red' ? 0 : x.level === 'amber' ? 1 : 2) - (y.level === 'red' ? 0 : y.level === 'amber' ? 1 : 2)) || (x.turns_bad_on ?? '').localeCompare(y.turns_bad_on ?? ''))
+  const gaps = accs.flatMap(([id, a]) => (a.q5?.gaps ?? []).map(g => ({ ...g, acct: id }))).sort((x, y) => (y.value_at_stake ?? -1) - (x.value_at_stake ?? -1))
+  return (
+    <>
+      <RadarPage />
+      {book && (
+        <>
+          <div className="row between"><h2 className="block-h">What turns bad, and when</h2>
+            <CsvButton name="risks" rows={() => risks.map(r => ({ account: names[r.acct] ?? r.acct, level: r.level ?? '', risk: r.text, turns_bad_on: r.turns_bad_on, deal: r.deal ?? '', records: rid(r.receipts) }))} /></div>
+          {risks.length ? <ol className="risk-list">{risks.map((r, i) => <li key={i} className="slip"><span className={`slip-k ${r.level ?? ''}`}>{r.level === 'red' ? 'Red' : r.level === 'amber' ? 'Amber' : 'Watch'}</span>
+            <div><p>{r.text}</p><div className={`slip-when${r.turns_bad_on !== NOT_ON_FILE ? ' bad' : ''}`}>{names[r.acct] ?? r.acct} · {turns(r)}</div></div><Receipts rs={r.receipts} /></li>)}</ol>
+            : <Empty title="Nothing flagged">Not an all-clear: see what is not known below.</Empty>}
+          <div className="row between"><h2 className="block-h">What is not known</h2>
+            <CsvButton name="gaps" rows={() => gaps.map(g => ({ account: names[g.acct] ?? g.acct, gap: g.text, who_could_fill: g.who_could_fill, value_at_stake: g.value_at_stake ?? '', records: rid(g.receipts) }))} /></div>
+          {gaps.length ? <div className="stack">{gaps.map((g, i) => <GapRow key={i} g={g} />)}</div> : <Empty title="No gaps recorded" />}
+        </>)}
     </>
   )
 }
@@ -155,11 +229,11 @@ const cmp = (k: SortKey, a: Deal, b: Deal): number => {
 export function DealsPage() {
   const { book, account, names, unreachable } = useData()
   const all = useMemo(() => dealsOf(book), [book])
-  const [view, setView] = useState<'table' | 'board'>('table')
+  const [view, setView] = useState<'table' | 'board'>('board')
   const [group, setGroup] = useState<'band' | 'stage'>('band')
   const [band, setBand] = useState(''); const [stage, setStage] = useState(''); const [risk, setRisk] = useState(''); const [q, setQ] = useState('')
   const [sort, setSort] = useState<{ k: SortKey; dir: 1 | -1 }>({ k: 'risk', dir: -1 })
-  if (!book) return unreachable ? <Failed what="deals" /> : <><PageHead title="Deals" /><Loading /></>
+  if (!book) return unreachable ? <Failed what="deals" /> : <><PageHead title="Pipeline" /><Loading /></>
   const stages = [...new Set(all.map(d => d.stage).filter(Boolean))] as string[]
   const rows = all.filter(d => sameAcct(account, d.acct) && (!band || d.band === band) && (!stage || (stage === '-' ? !d.stage : d.stage === stage))
     && (!risk || (risk === 'none' ? !d.risk : d.risk === risk)) && (!q || `${d.title} ${d.id ?? ''}`.toLowerCase().includes(q.toLowerCase())))
@@ -174,7 +248,8 @@ export function DealsPage() {
   const cols = group === 'band' ? BANDS.map(b => ({ key: b.key as string, label: b.label })) : [...stages, '-'].map(s => ({ key: s, label: s === '-' ? 'No stage on file' : s }))
   return (
     <>
-      <PageHead title="Deals" info={<WorthInfo />} sub={`${countLabel(scoped.map(d => d.kind))}${rows.length < scoped.length ? ` · ${rows.length} shown` : ''}`}>
+      <PageHead title="Pipeline" info={<WorthInfo />} sub={`${countLabel(scoped.map(d => d.kind))}${rows.length < scoped.length ? ` · ${rows.length} shown` : ''}`}>
+        <CsvButton name="pipeline" rows={() => rows.map(d => ({ account: acctLabel(names, d.acct), deal: d.title, id: d.id ?? '', band: d.band, stage: d.stage ?? '', value: d.value ?? '', currency: d.currency ?? '', renewal: d.term_ends ?? '', risk: d.risk ?? '', records: rid(d.receipts) }))} />
         <div className="seg" role="group" aria-label="View">
           <button type="button" aria-pressed={view === 'table'} onClick={() => setView('table')}><Icon n="list" size={16} />Table</button>
           <button type="button" aria-pressed={view === 'board'} onClick={() => setView('board')}><Icon n="board" size={16} />Board</button>
@@ -232,7 +307,7 @@ export function DealPage({ acct, k }: { acct: string; k: string }) {
   const activity = useApi<{ items: ActivityItem[] }>('/api/activity')
   const notes = useApi<{ notes: Note[] }>('/api/notes')
   if (!book) return unreachable ? <Failed what="this deal" /> : <Loading />
-  const back = <a className="link back" href="#/deals"><Icon n="back" size={16} />All deals</a>
+  const back = <a className="link back" href="#/deals"><Icon n="back" size={16} />Pipeline</a>
   if (!deal) return <>{back}<Empty title="Deal not found">No deal with id {k} on account {acct.toUpperCase()} in the current book.</Empty></>
   const a = book.accounts[acct]
   const power = a.q2?.deals?.find(p => p.deal === deal.id)
@@ -276,7 +351,7 @@ export function DealPage({ acct, k }: { acct: string; k: string }) {
           <h2 className="label">Moves</h2>
           {moves.length ? <ul className="stack tight">{moves.map(m => <li key={m.rank}><b>{m.rank}.</b> {m.action}<div className="muted small">{m.owner} · due {m.due}</div></li>)}</ul>
             : <p className="muted">None</p>}
-          {moves.length > 0 && <a className="link" href="#/moves">Review in Moves</a>}
+          {moves.length > 0 && <a className="link" href="#/tasks">Review in Tasks</a>}
         </section>
         <section className="card wide" aria-label="Activity">
           <h2 className="label">Activity</h2>
@@ -324,6 +399,7 @@ export function ActivityPage() {
     <>
       {head}
       <div className="filters">
+        <CsvButton name="activity" rows={() => items.map(i => ({ account: i.account, date: i.dated ?? '', kind: i.kind, title: i.title, summary: i.summary ?? '', deal: i.deal ?? '', records: rid(i.receipts) }))} />
         <input type="search" aria-label="Search activity" placeholder="Search activity" value={q} onChange={e => setQ(e.target.value)} />
         <select aria-label="Deal" value={deal} onChange={e => setDeal(e.target.value)}><option value="">All deals</option>{deals.map(d => <option key={d}>{d}</option>)}</select>
         <div className="seg" role="group" aria-label="Kind">{KINDS.map(k => (
@@ -360,7 +436,8 @@ export function PeoplePage() {
   const list: P[] = ppl.state === 'na' ? derived : ppl.data?.people ?? []
   const rows = list.filter(p => sameAcct(account, p.account) && (!side || p.side === side) && (!q || `${p.name} ${p.title ?? ''} ${p.org ?? ''}`.toLowerCase().includes(q.toLowerCase())))
   const n = (s: string) => rows.filter(p => p.side === s).length
-  const head = <PageHead title="People" sub={<><Stat n={n('customer')} label="customer" /><Stat n={n('flytbase')} label="FlytBase" /></>} />
+  const head = <PageHead title="People" sub={<><Stat n={n('customer')} label="customer" /><Stat n={n('flytbase')} label="FlytBase" /></>}>
+    <CsvButton name="people" rows={() => rows.map(p => ({ account: names[p.account] ?? p.account, name: p.name, title: p.title ?? '', side: p.side, roles: p.role_tags.join('; '), standing: p.standing ?? '', last_contact: p.last_contact?.date ?? '', sign_ins_90_days: p.sign_ins_90 ?? '', records: rid(p.receipts) }))} /></PageHead>
   const last = (p: P) => (act.data?.items ?? []).filter(i => (i.kind === 'email' || i.kind === 'call') && i.receipts.some(r => p.receipts.some(x => x.id === r.id)))
     .sort((a, b) => (b.dated ?? '').localeCompare(a.dated ?? ''))[0]
   return (
@@ -383,7 +460,7 @@ export function PeoplePage() {
                 <td>{p.role_tags.length ? p.role_tags.map(r => <span key={r} className="role-tag">{r.replace('_', ' ')}</span>) : <span className="muted">not on file</span>}</td>
                 <td><StandMeter stands={p.standing === NOT_ON_FILE ? null : p.standing} /></td>
                 <td className="num">{p.deals.length}</td>
-                <td>{l ? <span className="num">{day(l.dated)}</span> : <span className="muted">not on file</span>}</td>
+                <td>{p.last_contact ? <span className="num">{day(p.last_contact.date)} · {p.last_contact.days} d ago</span> : l ? <span className="num">{day(l.dated)}</span> : <span className="muted">not on file</span>}</td>
               </tr>)
           })}</tbody></table></div>
       )}
@@ -397,7 +474,9 @@ export function PeoplePage() {
               <dl className="dl">
                 <dt>Standing with you</dt><dd>{sel.standing && sel.standing !== NOT_ON_FILE ? sel.standing : 'not on file'}</dd>
                 <dt>Roles</dt><dd>{sel.role_tags.length ? sel.role_tags.map(r => r.replace('_', ' ')).join(', ') : 'not on file'}</dd>
-                <dt>Last contact</dt><dd>{last(sel) ? `${last(sel)!.title}, ${day(last(sel)!.dated)}` : 'not on file'}</dd>
+                <dt>Last contact</dt><dd>{sel.last_contact ? `${day(sel.last_contact.date)} (${sel.last_contact.days} days ago)` : last(sel) ? `${last(sel)!.title}, ${day(last(sel)!.dated)}` : 'not on file'}</dd>
+                <dt>Sign-ins, last 90 days</dt><dd>{sel.sign_ins_90 != null ? `${sel.sign_ins_90}${sel.last_sign_in ? ` (last ${sel.last_sign_in})` : ''}` : 'not on file'}</dd>
+                {!!sel.signals?.length && <><dt>New since handover</dt><dd>{sel.signals.map(g => g.title ?? g.id).join('; ')}</dd></>}
                 <dt>Deals</dt><dd>{dealIds(sel).length ? <ul className="stack tight">{dealIds(sel).map((d, i) => <li key={i}><a className="link" href={`#/deals/${sel.account}/${d.id}`} onClick={() => setSel(null)}>{('title' in d && d.title) || d.id}</a>{'role' in d && d.role ? <span className="muted"> · {String(d.role).replace('_', ' ')}</span> : null}</li>)}</ul> : 'none on file'}</dd>
                 <dt>Receipts</dt><dd><Receipts rs={uniq(sel.receipts) as Receipt[]} /></dd>
               </dl>

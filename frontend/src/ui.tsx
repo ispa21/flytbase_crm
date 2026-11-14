@@ -7,8 +7,9 @@ const SYM: Record<string, string> = { GBP: '£', EUR: '€', USD: '$', INR: '₹
 export const NO_CUR = 'unknown'
 export const NOT_ON_FILE = 'not on file'
 export const money = (n: number, cur: string) => (cur === NO_CUR ? '' : SYM[cur] ?? cur + ' ') + n.toLocaleString('en-GB')
-export const when = (iso: string | null | undefined) =>
-  iso ? new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null
+/** ISO string, or epoch seconds (how the backend stores note times). */
+export const when = (iso: string | number | null | undefined) =>
+  iso ? new Date(typeof iso === 'number' ? iso * 1000 : iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null
 export const day = (iso: string | null | undefined) => {
   if (!iso) return null
   const d = new Date(iso)
@@ -190,3 +191,24 @@ export const turns = (r: RiskItem) => (r.turns_bad_on && r.turns_bad_on !== NOT_
 export const allMoves = (book: Book | null, account: string): (Move & { acct: string })[] =>
   Object.entries(book?.accounts ?? {}).filter(([id]) => account === 'all' || id === account)
     .flatMap(([id, a]: [string, Account]) => (a.q3?.moves ?? []).map(m => ({ ...m, acct: id })))
+
+// ---- CSV export: what a table shows, record ids included, so a spreadsheet stays checkable ----
+const cell = (v: unknown) => {
+  const t = v == null ? '' : Array.isArray(v) ? v.join('; ') : String(v)
+  return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t
+}
+export const toCsv = (rows: Record<string, unknown>[]) => {
+  const cols = [...new Set(rows.flatMap(r => Object.keys(r)))]
+  return [cols.join(','), ...rows.map(r => cols.map(c => cell(r[c])).join(','))].join('\n') + '\n'
+}
+export const ids = (rs: Receipt[]) => uniq(rs).map(r => r.id).join('; ')
+export function downloadCsv(name: string, rows: Record<string, unknown>[]) {
+  const url = URL.createObjectURL(new Blob([toCsv(rows)], { type: 'text/csv;charset=utf-8' }))
+  const a = document.createElement('a')
+  a.href = url; a.download = `${name}-${new Date().toISOString().slice(0, 10)}.csv`
+  document.body.appendChild(a); a.click(); a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+export const CsvButton = ({ name, rows }: { name: string; rows: () => Record<string, unknown>[] }) => (
+  <button type="button" className="btn ghost" onClick={() => downloadCsv(name, rows())}>Download CSV</button>
+)

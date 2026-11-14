@@ -28,7 +28,9 @@ CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v DOUBLE PRECISION NOT NULL)
 CREATE TABLE IF NOT EXISTS notes(
   id {pk}, account TEXT NOT NULL, deal TEXT, text TEXT NOT NULL, kind TEXT NOT NULL, source TEXT,
   status TEXT NOT NULL, created_at DOUBLE PRECISION NOT NULL, saved_at DOUBLE PRECISION,
-  error TEXT, response TEXT);
+  error TEXT, response TEXT, title TEXT);
+CREATE TABLE IF NOT EXISTS drafts(
+  id TEXT PRIMARY KEY, account TEXT NOT NULL, status TEXT NOT NULL, note_id BIGINT, decided_at DOUBLE PRECISION NOT NULL);
 INSERT INTO caller(id) VALUES(1) ON CONFLICT DO NOTHING;
 INSERT INTO changes(id) VALUES(1) ON CONFLICT DO NOTHING;
 """
@@ -37,6 +39,7 @@ INSERT INTO changes(id) VALUES(1) ON CONFLICT DO NOTHING;
 PG_MIGRATE = """
 ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS checked_at DOUBLE PRECISION;
 UPDATE snapshots SET checked_at=fetched_at WHERE checked_at IS NULL;
+ALTER TABLE notes ADD COLUMN IF NOT EXISTS title TEXT;
 """
 _READY: set[str] = set()  # pg urls whose schema this process has already ensured
 
@@ -149,15 +152,15 @@ class DB:
         return self.x("SELECT COUNT(*) FROM queue").fetchone()[0]
 
     # --- notes (write-back, story 6.3) -----------------------------------
-    def add_note(self, account, deal, text, kind, source, now) -> int:
-        return self.x("INSERT INTO notes(account,deal,text,kind,source,status,created_at) "
-                      "VALUES(?,?,?,?,?,'queued',?) RETURNING id", account, deal, text, kind, source, now).fetchone()[0]
+    def add_note(self, account, deal, text, kind, source, now, title=None) -> int:
+        return self.x("INSERT INTO notes(account,deal,text,kind,source,status,created_at,title) "
+                      "VALUES(?,?,?,?,?,'queued',?,?) RETURNING id", account, deal, text, kind, source, now, title).fetchone()[0]
 
     def claim_note(self, nid):
         """queued -> sending, atomically. None if already claimed/sent: a note is sent at most once."""
         r = self.x("UPDATE notes SET status='sending' WHERE id=? AND status='queued' "
-                   "RETURNING account, deal, text, kind", nid).fetchone()
-        return dict(zip(("account", "deal", "text", "kind"), r)) if r else None
+                   "RETURNING account, deal, text, kind, title", nid).fetchone()
+        return dict(zip(("account", "deal", "text", "kind", "title"), r)) if r else None
 
     def finish_note(self, nid, ok, now, error, response):
         self.x("UPDATE notes SET status=?, saved_at=?, error=?, response=? WHERE id=?",
@@ -165,10 +168,20 @@ class DB:
         self.bump()
 
     def notes(self):
-        rows = self.x("SELECT id, account, deal, kind, source, text, status, created_at, saved_at, error, response "
+        rows = self.x("SELECT id, account, deal, kind, source, text, status, created_at, saved_at, error, response, title "
                       "FROM notes ORDER BY id DESC").fetchall()
-        cols = ("id", "account", "deal", "kind", "source", "text", "status", "created_at", "saved_at", "error", "response")
+        cols = ("id", "account", "deal", "kind", "source", "text", "status", "created_at", "saved_at", "error", "response", "title")
         return [dict(zip(cols, r)) for r in rows]
+
+    # --- drafts: the decision on each auto-drafted note (the drafts themselves are derived from the book) ---
+    def decide_draft(self, did, account, status, now, note_id=None):
+        """First decision wins: a draft approved or dismissed stays that way. -> True if this call recorded it."""
+        return self.x("INSERT INTO drafts(id,account,status,note_id,decided_at) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING",
+                      did, account, status, note_id, now).rowcount == 1
+
+    def drafts(self):
+        rows = self.x("SELECT id, account, status, note_id, decided_at FROM drafts").fetchall()
+        return {r[0]: dict(zip(("id", "account", "status", "note_id", "decided_at"), r)) for r in rows}
 
     # --- caller: lease, spacing, error ---------------------------------
     def acquire(self, now, ttl, min_idle=0.0) -> bool:
