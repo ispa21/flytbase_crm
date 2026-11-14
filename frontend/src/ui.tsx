@@ -1,5 +1,7 @@
-import type { ReactNode } from 'react'
+import { useState, useEffect, type ReactNode } from 'react'
 import { Popover } from '@base-ui/react/popover'
+import { Dialog } from '@base-ui/react/dialog'
+import recordsData from './records-data.json'
 import type { Account, BandKey, Book, Level, Line, Move, Receipt, RiskItem } from './api'
 
 // ---- formatting ----
@@ -54,21 +56,98 @@ export const Icon = ({ n, size = 18 }: { n: string; size?: number }) => (
 )
 export const Chev = () => <svg className="chev" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" /></svg>
 
-// ---- receipts ----
+// ---- receipts & record viewer ----
+export function openRecord(id: string) {
+  window.dispatchEvent(new CustomEvent('open-record', { detail: id }))
+}
+
 export function Chip({ r }: { r: Receipt }) {
   const long = r.id.length > 28
   const text = long ? `${r.id.slice(0, 12)}…${r.id.slice(-12)}` : r.id
-  const copy = () => navigator.clipboard?.writeText(r.id).catch(() => {})
-  if (!long) return <button type="button" className="receipt" onClick={copy} title={`Copy ${r.id}`}>{text}</button>
+  const handleClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    openRecord(r.id)
+  }
   return (
-    <Popover.Root>
-      <Popover.Trigger className="receipt" onClick={copy}>{text}</Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Positioner sideOffset={6}>
-          <Popover.Popup className="popup"><span className="k">{r.kind}</span>{r.id}</Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
+    <button
+      type="button"
+      className="receipt"
+      onClick={handleClick}
+      title={`Open record ${r.id}`}
+    >
+      <span className="receipt-dot" aria-hidden="true" />
+      {text}
+    </button>
+  )
+}
+
+export function RecordDrawer() {
+  const [recId, setRecId] = useState<string | null>(null)
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const id = (e as CustomEvent).detail
+      if (id) setRecId(id)
+    }
+    window.addEventListener('open-record', handler)
+    return () => window.removeEventListener('open-record', handler)
+  }, [])
+
+  if (!recId) return null
+
+  const data = recordsData as Record<string, { id: string; account: string; path: string; kind?: string; text?: string | null; data?: unknown }>
+  const cleanId = recId.trim()
+  const rec = data[cleanId] || data[cleanId.replace(/^[A-Z]\//, '')] || null
+
+  const copyContent = () => {
+    const textToCopy = rec?.text || (rec?.data ? JSON.stringify(rec.data, null, 2) : cleanId)
+    navigator.clipboard?.writeText(textToCopy).catch(() => {})
+  }
+
+  const copyPath = () => {
+    navigator.clipboard?.writeText(cleanId).catch(() => {})
+  }
+
+  const fileName = rec?.path?.split('/').pop() || cleanId.split('/').pop() || cleanId
+  const dirPath = rec?.path ? rec.path.substring(0, rec.path.lastIndexOf('/')) : ''
+
+  return (
+    <Dialog.Root open={!!recId} onOpenChange={open => { if (!open) setRecId(null) }}>
+      <Dialog.Portal>
+        <Dialog.Backdrop className="scrim" />
+        <Dialog.Popup className="drawer record-drawer">
+          <div className="row between record-drawer-head">
+            <div>
+              <Dialog.Title className="drawer-title">{fileName}</Dialog.Title>
+              <div className="record-meta">
+                {rec?.account && <span className="rtag">Account {rec.account}</span>}
+                {rec?.kind && <span className="rtag amber">{rec.kind}</span>}
+                {dirPath && <span className="mono muted small">{dirPath}/</span>}
+              </div>
+            </div>
+            <Dialog.Close className="icon-btn" aria-label="Close record view">
+              <Icon n="close" />
+            </Dialog.Close>
+          </div>
+          <div className="record-actions row">
+            <button type="button" className="btn small primary" onClick={copyContent}>Copy Content</button>
+            <button type="button" className="btn small ghost" onClick={copyPath}>Copy Path</button>
+          </div>
+          <div className="record-body">
+            {rec?.text ? (
+              <pre className="record-text">{rec.text}</pre>
+            ) : rec?.data ? (
+              <pre className="record-text record-json">{JSON.stringify(rec.data, null, 2)}</pre>
+            ) : (
+              <div className="empty-state">
+                <p><strong>{cleanId}</strong></p>
+                <p className="muted">Record reference tracked on file.</p>
+              </div>
+            )}
+          </div>
+        </Dialog.Popup>
+      </Dialog.Portal>
+    </Dialog.Root>
   )
 }
 export const uniq = (rs: Receipt[]) => [...new Map(rs.map(r => [`${r.kind}:${r.id}`, r])).values()]

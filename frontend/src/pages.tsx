@@ -229,7 +229,7 @@ const cmp = (k: SortKey, a: Deal, b: Deal): number => {
 export function DealsPage() {
   const { book, account, names, unreachable } = useData()
   const all = useMemo(() => dealsOf(book), [book])
-  const [view, setView] = useState<'table' | 'board'>('board')
+  const [view, setView] = useState<'table' | 'board'>('table')
   const [group, setGroup] = useState<'band' | 'stage'>('band')
   const [band, setBand] = useState(''); const [stage, setStage] = useState(''); const [risk, setRisk] = useState(''); const [q, setQ] = useState('')
   const [sort, setSort] = useState<{ k: SortKey; dir: 1 | -1 }>({ k: 'risk', dir: -1 })

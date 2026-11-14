@@ -2,6 +2,8 @@ import type { ReactNode } from 'react'
 import { Collapsible } from '@base-ui/react/collapsible'
 import type { Account, Book, Changes, DealPower, Entry, Gap, Move, RiskItem, RoleKey } from './api'
 import { Chev, NOT_ON_FILE, NO_CUR, Receipts, bandName, money, turns } from './ui'
+import { WorthBars } from './viz'
+import { RadarScope } from './radar'
 
 
 const ROLES: [RoleKey, string][] = [['decides', 'Decides'], ['pays', 'Pays'], ['uses', 'Uses'], ['could_block', 'Could block']]
@@ -189,21 +191,51 @@ function AccountCard({ id, a, today }: { id: string; a: Account; today: string }
   const top = a.insights?.items?.[0]
   const who = decider(a)
   const health: Dot = worst?.level === 'red' ? 'red' : worst?.level === 'amber' ? 'amber' : null
+  const days = ren?.term_ends ? daysTo(ren.term_ends, today) : null
+
   return (
     <section className="card hcard" aria-label={a.name ?? id}>
       <div className="hcard-h">
-        <span className={`hl-dot ${health ?? ''}`} aria-hidden="true" />
-        <h2><a href={`#/accounts/${id}`}>{a.name ?? id}</a></h2>
-        {ren?.term_ends && <span className="muted small nowrap">Renewal {ren.term_ends} · {daysTo(ren.term_ends, today)} days</span>}
+        <div className="hcard-title-row">
+          <span className={`hl-dot ${health ?? ''}`} aria-hidden="true" />
+          <h2><a href={`#/accounts/${id}`}>{a.name ?? id}</a></h2>
+        </div>
+        {ren?.term_ends && (
+          <span className="hcard-badge">
+            Renewal {ren.term_ends} · <span className={days != null && days < 90 ? 'err strong' : 'strong'}>{days} days</span>
+          </span>
+        )}
       </div>
-      <Line label="Worth" dot={null} href="#/deals">{worth(a)}</Line>
-      <Line label="Who decides" dot={who.dot} href="#/power">{who.text}</Line>
-      <Line label="Next" dot={m ? (m.overdue_since ? 'red' : (m.level as Dot) ?? null) : 'grey'} href="#/tasks">
-        {m ? <>{m.action} · <span className="nowrap">by {m.due}{m.overdue_since ? ' (overdue)' : ''}</span></> : 'no move on file'}</Line>
-      <Line label="At risk" dot={(worst?.level as Dot) ?? (worst ? null : 'grey')} href="#/radar">
-        {worst ? <>{worst.text}{worst.turns_bad_on !== NOT_ON_FILE && <span className="muted"> · {turns(worst).toLowerCase()}</span>}{risks.length > 1 && <span className="muted"> · +{risks.length - 1} more</span>}</> : 'nothing flagged (not an all-clear)'}</Line>
-      <Line label="Not known" dot="grey" href="#/radar">{gaps.length ? <>{gaps.length} {gaps.length === 1 ? 'gap' : 'gaps'}; biggest: {gaps[0].text}</> : a.q5 ? 'no gaps recorded' : 'not available yet'}</Line>
-      {top && <Line label="Insight" dot={top.tone === 'red' ? 'red' : top.tone === 'amber' ? 'amber' : top.tone === 'good' ? 'good' : null} href="#/insights">{top.headline}</Line>}
+
+      <div className="hcard-visuals">
+        <div className="hcard-viz-col worth-col">
+          <span className="label">Contract pipeline</span>
+          <WorthBars a={a} />
+        </div>
+        {a.radar ? (
+          <div className="hcard-viz-col radar-col">
+            <div className="row between">
+              <span className="label">Risk radar</span>
+              <a className="link small" href="#/radar">Open radar →</a>
+            </div>
+            <RadarScope acct={id} radar={a.radar} compact={true} />
+          </div>
+        ) : null}
+      </div>
+
+      <div className="hcard-lines">
+        <Line label="Who decides" dot={who.dot} href="#/power">{who.text}</Line>
+        <Line label="Next move" dot={m ? (m.overdue_since ? 'red' : (m.level as Dot) ?? null) : 'grey'} href="#/tasks">
+          {m ? <>{m.action} · <span className="nowrap">{m.overdue_since ? <span className="err strong">overdue ({m.due})</span> : `by ${m.due}`}</span></> : 'no move on file'}
+        </Line>
+        <Line label="Top risk" dot={(worst?.level as Dot) ?? (worst ? null : 'grey')} href="#/radar">
+          {worst ? <>{worst.text}{worst.turns_bad_on !== NOT_ON_FILE && <span className="muted"> · {turns(worst).toLowerCase()}</span>}{risks.length > 1 && <span className="muted"> · +{risks.length - 1} more</span>}</> : 'nothing flagged (not an all-clear)'}
+        </Line>
+        <Line label="Gaps" dot="grey" href="#/radar">
+          {gaps.length ? <>{gaps.length} {gaps.length === 1 ? 'gap' : 'gaps'}; biggest: {gaps[0].text}</> : a.q5 ? 'no gaps recorded' : 'not available yet'}
+        </Line>
+        {top && <Line label="Key insight" dot={top.tone === 'red' ? 'red' : top.tone === 'amber' ? 'amber' : top.tone === 'good' ? 'good' : null} href="#/insights">{top.headline}</Line>}
+      </div>
     </section>
   )
 }
@@ -215,11 +247,28 @@ function FirstMoves({ book, ids, names }: { book: Book; ids: string[]; names: Re
   if (!top.length) return null
   return (
     <section className="card firsts-card" aria-label="Do these first">
-      <h2 className="label">Do these first</h2>
+      <div className="firsts-head">
+        <h2 className="label">Do these first</h2>
+        <span className="mono small muted">3 immediate priorities</span>
+      </div>
       <ol className="first3">{top.map((m, i) => (
         <li key={`${m.acct}${m.rank}`}>
-          <span className={`hl-dot ${m.overdue_since ? 'red' : m.level ?? ''}`} aria-hidden="true" /><span className="n">{i + 1}</span>
-          <a className="grow" href="#/tasks"><b>{m.action}</b><span className="muted small block">{m.owner} · by {m.due}{m.overdue_since ? ' (overdue)' : ''} · {names[m.acct] ?? m.acct}{m.deal ? ` · ${m.deal.title}` : ''}</span></a>
+          <span className={`hl-dot ${m.overdue_since ? 'red' : m.level ?? ''}`} aria-hidden="true" />
+          <span className="n">{i + 1}</span>
+          <a className="grow" href="#/tasks">
+            <div className="first-top">
+              <b>{m.action}</b>
+              {m.overdue_since && <span className="rtag red">Overdue</span>}
+            </div>
+            <span className="muted small block">
+              <span className="strong" style={{ color: 'var(--ink)' }}>{names[m.acct] ?? m.acct}</span>
+              {' · '}
+              <span>{m.owner}</span>
+              {' · '}
+              <span className={m.overdue_since ? 'bad' : ''}>by {m.due}</span>
+              {m.deal ? ` · ${m.deal.title}` : ''}
+            </span>
+          </a>
           <Receipts rs={m.receipts.slice(0, 2)} />
         </li>))}</ol>
     </section>

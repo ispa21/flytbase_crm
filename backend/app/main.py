@@ -206,6 +206,35 @@ def get_activity():
         db.close()
 
 
+@app.get("/api/records/{account}/{path:path}")
+def get_record(account: str, path: str):
+    import json
+    db = _db()
+    pw = None
+    try:
+        s = db.latest("get_all_paperwork", {"account": account})
+        if s:
+            pw = s[0]
+    except Exception:
+        pass
+    finally:
+        db.close()
+    if not pw:
+        cache_file = Path(__file__).resolve().parent.parent.parent / "mcp-cache" / f"paperwork_{account}.json"
+        if cache_file.exists():
+            try:
+                raw = json.loads(cache_file.read_text())
+                pw = json.loads(raw["result"]["content"][0]["text"])
+            except Exception:
+                pass
+    if pw:
+        recs = pw.get("records") or []
+        for r in recs:
+            if r.get("path") == path or r.get("path") == path.lstrip("/"):
+                return {"ok": True, "record": {**r, "account": account, "id": f"{account}/{r.get('path')}"}}
+    raise HTTPException(status_code=404, detail=f"Record {account}/{path} not found")
+
+
 PUBLIC = Path(__file__).resolve().parent.parent / "public"  # built by `npm run build` in frontend/
 if PUBLIC.is_dir():
     app.mount("/assets", StaticFiles(directory=PUBLIC / "assets"), name="assets")

@@ -8,7 +8,7 @@ import { Ago, ToastHost, toast } from './live'
 import { ActivityPage, DealPage, DealsPage, PeoplePage, RisksPage, SyncPage, TasksPage, dealHref } from './pages'
 import { InsightsPage } from './insights'
 import { PowerPage } from './power'
-import { Failed, Icon, bandName, dealsOf, shortName, when } from './ui'
+import { Failed, Icon, RecordDrawer, bandName, dealsOf, shortName, when } from './ui'
 
 export { money } from './ui'
 
@@ -130,9 +130,38 @@ export default function App() {
   const seenN = useRef(0)
   useEffect(() => { if (changed.size > seenN.current) toast(`${changed.size} ${changed.size === 1 ? 'item' : 'items'} changed since the last sync`); seenN.current = changed.size }, [changed])
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPalette(o => !o) } }
+    let gPressed = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setPalette(o => !o)
+        return
+      }
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      if (e.key === 'g' && !e.metaKey && !e.ctrlKey) {
+        gPressed = true
+        if (timer) clearTimeout(timer)
+        timer = setTimeout(() => { gPressed = false }, 1000)
+        return
+      }
+      if (gPressed) {
+        gPressed = false
+        if (timer) clearTimeout(timer)
+        const map: Record<string, string> = {
+          h: '', d: 'deals', p: 'people', a: 'activity', t: 'tasks', s: 'sync', r: 'radar', w: 'power'
+        }
+        if (map[e.key] !== undefined) {
+          e.preventDefault()
+          go(map[e.key])
+        }
+      }
+    }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      if (timer) clearTimeout(timer)
+    }
   }, [])
   useEffect(() => { setNav(false); document.getElementById('main')?.focus({ preventScroll: true }) }, [parts.join('/')])
   useEffect(() => { document.title = `${TITLE[parts[0] ?? 'home'] ?? 'Home'} · FlytBase CRM` }, [parts])
@@ -201,6 +230,7 @@ export default function App() {
                 <option value="all">All accounts</option>
                 {accounts.map(([id]) => <option key={id} value={id}>{names[id]}</option>)}
               </select>)}
+            <span className="viewing">Viewing: <b>{account === 'all' ? 'All accounts' : names[account] ?? account}</b></span>
             <span className="chip" title={[book?.as_of && `Data as of ${book.as_of}`, book?.today && `Dates counted from ${book.today} (${book.today_basis ?? 'server date'})`].filter(Boolean).join('\n') || undefined}>
               <i className="dot" aria-hidden="true" />{banner ? `Stale${asOf ? ` · as of ${asOf}` : ''}` : asOf ? <><span className="wide-only">As of {asOf} · </span>live</> : 'Waiting for first sync'}{!banner && asOf && <Ago iso={health?.last_good_poll} />}</span>
             <Bell onSeen={markSeen} />
@@ -224,6 +254,7 @@ export default function App() {
           </Dialog.Portal>
         </Dialog.Root>
         <Palette open={palette} setOpen={setPalette} actions={actions} />
+        <RecordDrawer />
       </div>
     </DataCtx.Provider>
   )
