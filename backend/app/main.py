@@ -4,6 +4,7 @@ import os
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
 
+from .book import build_book
 from .db import DB
 from .health import health
 from .mcp import McpClient
@@ -76,5 +77,14 @@ def get_changes(since: int = 0):
     try:
         n = db.changes()
         return {"n": n, "changed": n > since}
+    finally:
+        db.close()
+
+
+@app.get("/api/book")
+def get_book():
+    db = _db()
+    try:
+        return build_book(db)
     finally:
         db.close()
