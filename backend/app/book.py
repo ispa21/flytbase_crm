@@ -509,8 +509,74 @@ def _account_q5(acc, q1, q2, q4, paperwork):
     return {"loaded": paperwork is not None, "gaps": gaps}
 
 
+# ---- Q3: first three moves (story 6.1) ----
+def _add_bdays(d, n):
+    while n:
+        d += timedelta(days=1)
+        n -= d.weekday() < 5
+    return d
+
+
+def _account_q3(acc, q1, q2, q4, q5, paperwork, today):
+    """Top 3 moves by plain rules over q1/q2/q4/q5 output. Owner = the CSM profile.json names (no `to`), else "not on file".
+    Due = 2 (red) or 5 (else) business days out, held before the turn date when that is still ahead. Nothing invented."""
+    aid = acc["id"]
+    prof = next(((r.get("data") or {}) for r in (paperwork or {}).get("records") or [] if r["path"] == "profile.json"), {})
+    csm = next((c["who"] for c in (prof.get("flytbase_side") or {}).get("csm") or [] if not c.get("to")), None)
+    owner = NA if not csm else "the CSM (you)" if csm == "you" else csm
+    orec = [{"id": _rec(aid, "profile.json"), "kind": "record"}] if csm else []
+    deals = {l["id"]: (l["title"], rank) for rank, b in enumerate(q1["bands"].values()) for l in b if l["id"]}
+    cands = []
+
+    def cand(tier, kind, action, why, receipts, deal=None, turns=NA, level=None, with_=NA):
+        cands.append({"tier": tier, "kind": kind, "action": action, "why_now": why, "receipts": receipts + orec, "level": level,
+                      "deal": {"id": deal, "title": deals[deal][0]} if deal in deals else None, "turns_bad_on": turns, "with": with_,
+                      "_k": (tier, deals[deal][1] if deal in deals else 9, turns if turns[:1].isdigit() else "9999")})
+
+    for i in q4["items"]:
+        d, t, k = i["deal"], i["turns_bad_on"], i["kind"]
+        title = deals[d][0] if d in deals else None
+        if k == "renewal":
+            cand(0 if i["level"] == "red" else 1, k, f"Clear what blocks {title}: name the signer or settle the open blocker", i["text"],
+                 i["receipts"], d, t, i["level"])
+        elif k == "cold":
+            cand(2, k, f"Reply to {i['who']}", i["text"], i["receipts"], None, t, with_=i["who"])
+        elif k == "stuck" and i.get("ticket"):
+            cand(2, k, f"Assign an owner to {i['ticket']}", i["text"], i["receipts"], None, t)
+        elif k == "stuck" and i["text"].startswith("Open blocker") and not any(x["deal"] == d and x["kind"] == "renewal" for x in q4["items"]):  # renewal move already covers it
+            cand(2, k, f"Clear the blocker on {title}", i["text"], i["receipts"], d, t)
+        elif k == "signal":
+            cand(2, k, f"Respond to: {i['text'].split(':')[0]}", i["text"], i["receipts"], None, t)
+    seen = set()  # at most one find-out move per deal: the first gap listed for it
+    for g in q5["gaps"]:
+        if g["deals"] and g["value_at_stake"] is not None and g["deals"][0]["id"] not in seen:  # only gaps that sit on priced deals
+            d = g["deals"][0]["id"]
+            seen.add(d)
+            who = g["who_could_fill"]
+            cand(3, "gap", f"Find out from {who}: {g['text']}" if who != NA else f"Find out (nobody on file can fill it): {g['text']}",
+                 f"Blocks the value of {deals[d][0]} ({g['value_at_stake']} {q1['currency']})", g["receipts"], d, with_=who)
+    out = []
+    for n, c in enumerate(sorted(cands, key=lambda c: c["_k"])[:3], start=1):
+        due = _add_bdays(today, 2 if c["level"] == "red" else 5)
+        basis = "2 business days (red)" if c["level"] == "red" else "5 business days"
+        if c["turns_bad_on"][:1].isdigit() and date.fromisoformat(c["turns_bad_on"]) > today:
+            due, basis = min(due, date.fromisoformat(c["turns_bad_on"]) - timedelta(days=1)), f"{basis}, held before {c['turns_bad_on']}"
+        elif c["turns_bad_on"][:1].isdigit():
+            basis += f"; turn date {c['turns_bad_on']} already passed"
+        else:
+            basis += "; no turn date on file"
+        due = max(due, today)
+        m = {k: v for k, v in c.items() if k not in ("tier", "_k")}
+        m.update(rank=n, owner=owner, due=due.isoformat(), due_basis=basis)
+        ids = ", ".join(r["id"] for r in m["receipts"])
+        m["draft_note"] = {"kind": "next_step", "text": f"Next step: {m['action']}. Owner: {owner}. Due: {m['due']} ({basis}). "
+                           f"Deal: {m['deal']['id'] if m['deal'] else NA}. Why now: {m['why_now']}. Records: {ids}."}
+        out.append(m)
+    return {"loaded": paperwork is not None, "moves": out, "candidates": len(cands)}
+
+
 def band_deals(my_accounts, paperwork_by_acc, strict=False, file_text=None, signals=None, today=None):
-    """-> {account id: {q1, q2, q4, q5}}. Receipts are checked against the same snapshots."""
+    """-> {account id: {q1, q2, q3, q4, q5}}. Receipts are checked against the same snapshots."""
     out = {}
     today = today or date.today()
     files = my_accounts.get("files") or []
@@ -520,12 +586,14 @@ def band_deals(my_accounts, paperwork_by_acc, strict=False, file_text=None, sign
         q2 = _account_q2(acc, files, pw, file_text)
         q4 = _account_q4(acc, files, pw, file_text, signals, today)
         q5 = _account_q5(acc, q1, q2, q4, pw)
+        q3 = _account_q3(acc, q1, q2, q4, q5, pw, today)
         known = _known({**acc, "_files": files, "_signals": signals}, pw)
         check_receipts(q1, known, strict)
         check_receipts(q2, known, strict)
         check_receipts(q4, known, strict)
         check_receipts(q5, known, strict)
-        out[acc["id"]] = {"q1": q1, "q2": q2, "q4": q4, "q5": q5, "name": acc.get("name")}
+        check_receipts(q3, known, strict)
+        out[acc["id"]] = {"q1": q1, "q2": q2, "q3": q3, "q4": q4, "q5": q5, "name": acc.get("name")}
     return out
 
 

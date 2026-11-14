@@ -190,6 +190,84 @@ function Risks({ q4 }: { q4: Q4 }) {
   )
 }
 
+/** Value at stake per currency, never summed across currencies. */
+const stake = (g: Gap) => {
+  const by: Record<string, number> = {}
+  for (const d of g.deals) if (d.value != null) by[d.currency] = (by[d.currency] ?? 0) + d.value
+  return Object.entries(by).map(([c, n]) => money(n, c)).join(' · ')
+}
+
+function GapRow({ g }: { g: Gap }) {
+  const s = stake(g)
+  return (
+    <Collapsible.Root className="gap">
+      <Collapsible.Trigger className="gap-head">
+        <Chev />
+        <span className="gap-text">{g.text}</span>
+        {s && <span className="num">{s}</span>}
+      </Collapsible.Trigger>
+      <Collapsible.Panel className="panel">
+        <div className="gap-in">
+          <div className="role">
+            <span className="label">Puts at risk</span>
+            {g.deals.length ? g.deals.map(d => (
+              <div key={d.id}><strong>{d.title}</strong> <span className="num">{d.value != null ? money(d.value, d.currency) : 'no value on file'}</span></div>
+            )) : <span className="muted">No single deal; account-wide</span>}
+            {g.unpriced_deals > 0 && g.deals.length > 0 && <span className="muted">{g.unpriced_deals} without a value, not counted</span>}
+          </div>
+          <div className="role">
+            <span className="label">Who could fill it</span>
+            <span className={g.who_could_fill === NOT_ON_FILE ? 'muted' : ''}>{g.who_could_fill === NOT_ON_FILE ? 'Not on file' : g.who_could_fill}</span>
+          </div>
+          <div className="role"><span className="label">Receipts</span><Receipts rs={g.receipts} /></div>
+        </div>
+      </Collapsible.Panel>
+    </Collapsible.Root>
+  )
+}
+
+function NotKnown({ q5 }: { q5: Q5 }) {
+  const gaps = [...(q5.gaps ?? [])].sort((a, b) => (b.value_at_stake ?? -1) - (a.value_at_stake ?? -1)) // highest value first; unpriced last (stable)
+  if (!gaps.length) return null
+  return (
+    <div className="not-known">
+      <h3 className="label strip-title">Not known yet</h3>
+      {gaps.map((g, i) => <GapRow key={i} g={g} />)}
+    </div>
+  )
+}
+
+const bandName = (k: string) => BANDS.find(b => b.key === k)?.label ?? k
+
+function WhatChanged({ c, names, onSeen }: { c: Changes; names: Record<string, string>; onSeen: () => void }) {
+  const acc = (id?: string | null) => (id && names[id]) || id || ''
+  const empty = !c.moved.length && !c.new_deals.length && !c.new_signals.length
+  return (
+    <section className="changes" aria-label="What changed">
+      <div className="changes-head">
+        <h2 className="label">What changed</h2>
+        <button type="button" className="resync" onClick={onSeen}>Mark as seen</button>
+      </div>
+      {empty ? <p className="muted">Nothing changed since you last looked.</p> : (
+        <ul className="changes-list">
+          {c.new_signals.map(s => (
+            <li key={`s${s.id}`}><span><span className="tag">New signal</span> {s.title ?? s.id}{s.account && <span className="muted"> · {acc(s.account)}</span>}</span><Receipts rs={s.receipts} /></li>
+          ))}
+          {c.moved.map(m => (
+            <li key={`m${m.account}${m.deal}`}><span><span className="tag">Moved</span> {m.title}<span className="muted"> · {acc(m.account)}</span>
+              {m.band && <span>, {bandName(m.band.from)} to {bandName(m.band.to)}</span>}
+              {m.value && <span>, value {m.value.from ?? 'none'} to {m.value.to ?? 'none'}</span>}
+              {m.stage && <span>, stage {m.stage.from ?? 'none'} to {m.stage.to ?? 'none'}</span>}</span><Receipts rs={m.receipts} /></li>
+          ))}
+          {c.new_deals.map(d => (
+            <li key={`n${d.account}${d.deal}`}><span><span className="tag">New deal</span> {d.title}<span className="muted"> · {acc(d.account)} · {bandName(d.band)}</span></span><Receipts rs={[{ id: d.deal, kind: 'deal' }]} /></li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
 const Skeleton = () => (
   <div className="columns" aria-busy="true">
     <span className="sr-only" role="status">Loading…</span>
@@ -244,6 +322,7 @@ function Column({ aid, acc, changed }: { aid: string; acc: Account; changed: Set
         </div>
       ) : <p className="empty">No value data for this account yet. It will appear here as soon as the next sync brings it in.</p>}
       {acc.q4 && <div className="sec"><div className="sec-h"><h3>Going wrong</h3></div><Risks q4={acc.q4} /></div>}
+      {acc.q5 && <NotKnown q5={acc.q5} />}
     </section>
   )
 }
@@ -275,6 +354,7 @@ export default function App() {
       </header>
       <div className="sr-only" role="status" aria-live="polite">{note}</div>
       <main>
+        {book?.changes && <WhatChanged c={book.changes} names={Object.fromEntries(accounts.map(([id, a]) => [id, a.name ?? id]))} onSeen={markSeen} />}
         {!book ? (unreachable ? null : <Skeleton />)
           : book.as_of === null ? <div className="calm"><p>Waiting for first sync. Figures appear here once the first data arrives.</p></div>
           : <div className="columns">{accounts.map(([id, a]) => <Column key={id} aid={id} acc={a} changed={changed} />)}</div>}

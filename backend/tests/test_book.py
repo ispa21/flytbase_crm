@@ -225,3 +225,22 @@ def test_what_changed(db):
     assert [s["id"] for s in c["new_signals"]] == ["s_new"] and c["new_signals"][0]["receipts"] == [{"id": "s_new", "kind": "signal"}]
     assert [(m["deal"], m["stage"]["to"]) for m in c["moved"]] == [(ma["accounts"][0]["opportunities"][0]["id"], "closed")]
     assert what_changed(db, 5000.0, today=TODAY)["moved"] == [] and c["new_deals"] == []
+
+
+# ---- story 6.1: first three moves ----
+def test_q3_moves(db):
+    a, b = (load4(db)[k]["q3"] for k in "AB")
+    mb, ma = b["moves"], a["moves"]
+    assert [m["rank"] for m in mb] == [1, 2, 3] and len(ma) == 3
+    assert mb[0]["deal"]["id"] == "b_renewal" and mb[0]["level"] == "red" and mb[0]["turns_bad_on"] == "2026-11-02"
+    assert mb[0]["due"] == "2026-11-17" and "already passed" in mb[0]["due_basis"]  # 2 business days from Sat 14 Nov
+    assert ma[0]["deal"]["id"] == "a_renewal" and ma[0]["due"] == "2026-11-20" and "held before 2026-11-30" in ma[0]["due_basis"]
+    assert all(m["owner"] == "the CSM (you)" and {"id": "A/profile.json", "kind": "record"} in m["receipts"] for m in ma)
+    assert all(m["draft_note"]["kind"] == "next_step" and m["receipts"][0]["id"] in m["draft_note"]["text"] for m in ma + mb)
+    assert any(m["kind"] == "cold" and m["with"] == "Insp. Karen Mbeki" for m in ma)
+
+
+def test_q3_no_paperwork(db):
+    db.add_snapshot("get_my_accounts", {}, unwrap(fixture("get_my_accounts", {})), 1000.0)
+    q = build_book(db, strict=True, today=TODAY)["accounts"]["B"]["q3"]
+    assert q["loaded"] is False and all(m["owner"] == "not on file" for m in q["moves"])
