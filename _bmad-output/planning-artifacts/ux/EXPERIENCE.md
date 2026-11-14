@@ -19,7 +19,7 @@ Visual identity is in `DESIGN.md`; tokens are cited as `{path.to.token}`. Spines
 
 Single-surface responsive web, one page, no routes needed for v1. React + Vite + TypeScript, served by the same Vercel project as the API. Desktop first (judge on a laptop or projector), usable at 360px.
 
-**UI library (pick-ui-library): base-ui.** One library for the accessible primitives this page needs: Collapsible (every disclosure row), Dialog (approve and save), Popover (long receipt ids). It is unstyled, so `DESIGN.md` tokens apply untouched as plain CSS variables, with no theme to fight. Toasts (save confirmation) add Sonner only if the save state line proves too quiet. Not chosen: a styled kit, because the page is typography and disclosure, not widgets.
+**UI library (pick-ui-library): base-ui.** One library for the accessible primitives this page needs: Collapsible (every disclosure row), Popover (long receipt ids). It is unstyled, so `DESIGN.md` tokens apply untouched as plain CSS variables, with no theme to fight. Toasts (save confirmation) add Sonner only if the save state line proves too quiet. Not chosen: a styled kit, because the page is typography and disclosure, not widgets.
 
 The page opens on its content: both accounts, no click, no query, no selection. The reader never maps a question to a place; the order of the page is the order of a CSM's thinking.
 
@@ -34,7 +34,7 @@ One page, top to bottom.
 | Freshness bar (sticky) | "As of" time, live or unreachable state | Yes |
 | What Changed | Up to three headline moves since last visit, "See all N" | Yes |
 | Account column A, Account column B (side by side) | See next table | Lead line and Money strip open; rest one line each |
-| Approve dialog | The drafted note, approve or discard | On demand |
+| Draft note (inline) | The drafted note in its card, with Approve and save or Discard | On demand |
 
 Per account, fixed order, plain-word labels (no question wording):
 
@@ -104,18 +104,18 @@ Visual specs are in `DESIGN.md.Components`.
 
 ## Interaction Primitives
 
-- **Self-refresh.** The page polls `GET /api/changes` on an interval and re-renders only what changed. No reload. [ASSUMPTION: 30s interval; the MCP itself is polled by the backend at one call a minute.] Conflict to resolve in architecture: ADR 0003 and story 1.5 describe Server-Sent Events on one process; this spine specifies polling because the target is a Vercel project. If SSE stays, the behaviour above is unchanged.
+- **Self-refresh.** The page polls `GET /api/changes` on an interval and re-renders only what changed. No reload. [DECIDED by owner: 30s interval; the MCP itself is polled by the backend at one call a minute.] Conflict to resolve in architecture: ADR 0003 and story 1.5 describe Server-Sent Events on one process; this spine specifies polling because the target is a Vercel project. If SSE stays, the behaviour above is unchanged.
 - **Disclosure** open and close: 150ms ease-out height and opacity. No animation on polling refresh. [ASSUMPTION; follows the rule that frequent updates do not animate.]
-- **Write-back.** Nothing is written without an explicit click on Approve and save in the dialog. The dialog shows the exact note text, its kind (`next_step`, `task` or `risk`), and the account. Enter does not submit; the button must be activated. [ASSUMPTION: no keyboard shortcut submits.]
+- **Write-back.** Nothing is written without an explicit click on Approve and save. The draft sits inline in its card and shows the exact note text, its kind (`next_step`, `task` or `risk`) and the account right beside the button. One click on the button saves; there is no confirm dialog and no keyboard shortcut submits. [DECIDED by owner: inline approve button.] The button is disabled while the MCP is unreachable.
 - **Last visit.** Kept per browser (story 7.2). What Changed compares against it.
-- **Keyboard.** Tab order follows reading order; Space and Enter toggle disclosures; Escape closes dialog and popovers.
+- **Keyboard.** Tab order follows reading order; Space and Enter toggle disclosures; Escape closes popovers.
 - **Copy.** Any receipt chip copies its id.
 
 ## Accessibility Floor
 
 - Every colour meaning has a text or icon twin (band names, risk text).
 - Text contrast at least 4.5:1 against its surface; verify the band and risk colours in `DESIGN.md` at implementation. [ASSUMPTION: unverified.]
-- Disclosures are real buttons with `aria-expanded`; the dialog traps focus and returns it to the trigger.
+- Disclosures are real buttons with `aria-expanded`; popovers trap focus and return it to the trigger.
 - Live updates announce through one polite live region: "2 items changed" only, never the whole page.
 - Freshness bar is text, not colour alone.
 - Respect `prefers-reduced-motion`: disclosures switch with no animation.
@@ -129,7 +129,7 @@ Below 1024px the columns stack, A then B, each complete. The sticky freshness ba
 
 **Monday opening (Maya, newly inherited CSM, 08:50).** Maya opens the page. Nothing to click. She reads the bar: as of 08:49. What Changed says B's renewal is now red. In column B the lead line is that renewal, with its date and the missing sign-off. In column A the lead line says the renewal is amber and turns red on 30 Nov. Climax: in under ten seconds she knows which account burns first and why. She taps Do first on B, sees the top move with owner and date, and opens its draft.
 
-**Approving a note.** Maya reads the draft, sees every figure carries a receipt chip, presses Approve and save. The dialog repeats the text and kind; she confirms. The card shows Pending, then "Sent at 10:03". Climax: she can see the exact words that reached the CRM and when.
+**Approving a note.** Maya reads the draft, sees every figure carries a receipt chip, presses Approve and save beside the exact text and kind. The card shows Pending, then "Sent at 10:03". Climax: she can see the exact words that reached the CRM and when.
 
 **Checking a number.** A judge taps the On contract chip. The deal rows open with the file or person behind each value. They tap a receipt id: it names the paperwork record. Unbacked sits apart, and the claim is struck through where a later verified fact exists. Climax: the number holds up under questioning.
 

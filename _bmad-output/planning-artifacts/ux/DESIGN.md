@@ -124,11 +124,11 @@ Order inside each column, fixed so a reader learns it once: Lead line, Money str
 
 ## Elevation & Depth
 
-Flat. Cards separate by `{colors.line}` hairline, not shadow. One exception: the approve dialog uses a single soft shadow and a scrim. [ASSUMPTION.]
+Flat. Cards separate by `{colors.line}` hairline, not shadow. No shadows; popovers use a hairline border.
 
 ## Shapes
 
-`{rounded.md}` cards and dialog, `{rounded.sm}` receipt chips, `{rounded.full}` band chips. No other radii.
+`{rounded.md}` cards, `{rounded.sm}` receipt chips, `{rounded.full}` band chips. No other radii.
 
 ## Components
 
