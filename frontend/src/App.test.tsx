@@ -177,3 +177,62 @@ test('no q2/q4 keys: no power or slipping sections', async () => {
   await screen.findByText('Acme')
   expect(screen.queryByText(/Slipping|Who decides/)).toBeNull()
 })
+
+const gap = (text: string, deals: any[], who = 'not on file', extra = {}) => ({
+  kind: 'power', text, deals, value_at_stake: deals.reduce((s, d) => s + (d.value ?? 0), 0) || null,
+  unpriced_deals: deals.filter(d => d.value == null).length, who_could_fill: who, receipts: [{ id: 'd1', kind: 'deal' }], ...extra,
+})
+const q5 = {
+  loaded: true,
+  gaps: [
+    gap('Small gap', [{ id: 'd2', title: 'Deal d2', value: 5000, currency: 'GBP' }]),
+    gap('Big gap', [{ id: 'd1', title: 'Deal d1', value: 100000, currency: 'GBP' }, { id: 'd9', title: 'Deal d9', value: 7, currency: 'USD' }], 'Priya Nair'),
+    gap('No deal gap', [], 'not on file', { value_at_stake: null }),
+  ],
+}
+
+test('q5: gaps ordered by value, per-currency, who could fill, receipts on demand; absent key = nothing', async () => {
+  mock({ book: book({ accounts: { a: { name: 'Acme', q1: q1(), q5 }, b: { name: 'Beta', q1: q1() } } }), health: ok, changes: { n: 1 } })
+  render(<App />)
+  await screen.findByText('Acme')
+  expect(screen.getAllByText('Not known yet')).toHaveLength(1)
+  const heads = screen.getAllByRole('button', { name: /gap/ }).map(b => b.textContent)
+  expect(heads.map(h => h!.match(/Big|Small|No deal/)![0])).toEqual(['Big', 'Small', 'No deal'])
+  expect(heads[0]).toContain('£100,000 · $7') // never summed across currencies
+  fireEvent.click(screen.getByRole('button', { name: /Big gap/ }))
+  expect(await screen.findByText('Priya Nair')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: /No deal gap/ }))
+  expect(await screen.findByText('Not on file')).toBeInTheDocument()
+  expect(screen.getByText(/No single deal/)).toBeInTheDocument()
+})
+
+const changes = (o = {}) => ({ since: 1, moved: [], new_deals: [], new_signals: [], ...o })
+
+test('what changed: requests since=<stored>, lists items, mark as seen updates storage and refetches', async () => {
+  localStorage.setItem('book.lastSeen', '1000')
+  const full = changes({
+    new_signals: [{ id: 'sig-1', account: 'a', title: 'Renewal email', first_seen: 5, receipts: [{ id: 'sig-1', kind: 'signal' }] }],
+    moved: [{ account: 'b', deal: 'd2', title: 'Deal d2', band: { from: 'unbacked', to: 'on_contract' }, receipts: [{ id: 'd2', kind: 'deal' }] }],
+    new_deals: [{ account: 'a', deal: 'd7', title: 'Deal d7', band: 'unpriced' }],
+  })
+  const f = mock({ book: book({ changes: full }), health: ok, changes: { n: 1 } })
+  render(<App />)
+  expect(await screen.findByText('Renewal email')).toBeInTheDocument()
+  expect(f.mock.calls.some(c => c[0] === '/api/book?since=1000')).toBe(true)
+  expect(screen.getByText(/Unbacked to On contract/)).toBeInTheDocument()
+  expect(screen.getByText('d7')).toBeInTheDocument()
+  f.mockImplementation(async (url: string) => ({ ok: true, json: async () => (url.startsWith('/api/book') ? book({ changes: changes() }) : url.startsWith('/api/health') ? ok : { n: 1 }) }))
+  fireEvent.click(screen.getByRole('button', { name: 'Mark as seen' }))
+  expect(await screen.findByText('Nothing changed since you last looked.')).toBeInTheDocument()
+  expect(Number(localStorage.getItem('book.lastSeen'))).toBeGreaterThan(1000)
+})
+
+test('what changed: no key = no strip; storage failure does not break the page', async () => {
+  vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked') })
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked') })
+  mock({ book: book(), health: ok, changes: { n: 1 } })
+  render(<App />)
+  await screen.findByText('Acme')
+  expect(screen.queryByText('What changed')).toBeNull()
+  vi.restoreAllMocks()
+})

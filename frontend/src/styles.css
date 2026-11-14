@@ -104,3 +104,16 @@ main { max-width: 1200px; margin: 0 auto; padding: 32px 16px 64px; }
 .level { font: 700 12px/16px var(--font); letter-spacing: .04em; text-transform: uppercase; }
 .level-red { color: var(--risk-red); }
 .level-amber { color: var(--risk-amber); }
+
+.changes { margin-bottom: 32px; padding: 16px 24px; background: var(--surface-raised); border: 1px solid var(--line); border-radius: var(--r-md); }
+.changes-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.changes-list { list-style: none; margin: 0; padding: 0; }
+.changes-list li { display: flex; flex-direction: column; gap: 8px; padding: 12px 0; border-top: 1px solid var(--line); }
+.not-known { margin-top: 16px; }
+.gap { background: transparent; border: 1px dashed var(--line-strong); border-radius: var(--r-md); overflow: hidden; }
+.gap-head { display: flex; align-items: center; gap: 8px 12px; width: 100%; min-height: 56px; padding: 8px 16px; background: none; border: 0; cursor: pointer; text-align: left; transition: background-color 150ms ease; }
+.gap-head:focus-visible { outline-offset: -2px; }
+@media (hover: hover) { .gap-head:hover { background: var(--hover-wash); } }
+.gap-head:active { background: var(--press-wash); }
+.gap-head[data-panel-open] .chev { transform: rotate(90deg); }
+.gap-text { flex: 1; min-width: 0; }

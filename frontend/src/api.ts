@@ -24,8 +24,19 @@ export type RiskItem = {
   kind: string; level: 'red' | 'amber' | null; deal: string | null; text: string; turns_bad_on: string; receipts: Receipt[]
 }
 export type Q4 = { today: string; loaded: boolean; signals_loaded: boolean; items: RiskItem[]; gaps: string[] }
-export type Account = { name: string | null; q1?: Q1; q2?: Q2; q3?: unknown; q4?: Q4; q5?: unknown }
-export type Book = { as_of: string | null; state: string; accounts: Record<string, Account> }
+export type Account = { name: string | null; q1?: Q1; q2?: Q2; q3?: unknown; q4?: Q4; q5?: Q5 }
+export type Gap = {
+  kind: string; text: string; deals: { id: string; title: string; value: number | null; currency: string }[]
+  value_at_stake: number | null; unpriced_deals: number; who_could_fill: string; receipts: Receipt[]
+}
+export type Q5 = { loaded: boolean; gaps: Gap[] }
+export type Changes = {
+  since: number
+  moved: { account: string; deal: string; title: string; band?: { from: string; to: string }; value?: { from: number | null; to: number | null }; stage?: { from: string | null; to: string | null }; receipts: Receipt[] }[]
+  new_deals: { account: string; deal: string; title: string; band: string }[]
+  new_signals: { id: string; account?: string | null; title?: string | null; first_seen: number; receipts: Receipt[] }[]
+}
+export type Book = { as_of: string | null; state: string; accounts: Record<string, Account>; changes?: Changes }
 export type Health = { stale: boolean; last_good_poll: string | null; resync_at?: string | null; pending_calls?: number }
 
 const get = async <T,>(url: string): Promise<T> => {
@@ -33,6 +44,11 @@ const get = async <T,>(url: string): Promise<T> => {
   if (!r.ok) throw new Error(`${url} ${r.status}`)
   return r.json()
 }
+
+const KEY = 'book.lastSeen'
+const nowS = () => Math.floor(Date.now() / 1000)
+const readSeen = (): number | null => { try { const v = Number(localStorage.getItem(KEY)); return v > 0 ? v : null } catch { return null } }
+const writeSeen = (n: number) => { try { localStorage.setItem(KEY, String(n)) } catch { /* private mode: no memory */ } }
 
 export const POLL_MS = 30_000
 export const POKE_MS = 300_000
@@ -53,9 +69,11 @@ export function useBook() {
   const [changed, setChanged] = useState<Set<string>>(new Set())
   const prev = useRef<Map<string, string> | null>(null)
   const since = useRef(0)
+  const seen = useRef<number | null>(null)
+  if (seen.current === null) { seen.current = readSeen(); if (seen.current === null) writeSeen(nowS()) } // first visit: start the clock
 
   const loadBook = useCallback(async () => {
-    const b = await get<Book>('/api/book')
+    const b = await get<Book>(seen.current ? `/api/book?since=${seen.current}` : '/api/book')
     const fp = fingerprint(b)
     if (prev.current) {
       const ch = [...fp].filter(([k, v]) => prev.current!.get(k) !== v).map(([k]) => k)
@@ -105,6 +123,11 @@ export function useBook() {
     return () => { dead = true; clearInterval(t) }
   }, [loadBook])
 
+  const markSeen = useCallback(async () => {
+    seen.current = nowS(); writeSeen(seen.current)
+    try { await loadBook() } catch { /* next poll retries */ }
+  }, [loadBook])
+
   const clearChanged = useCallback(() => setChanged(s => (s.size ? new Set() : s)), [])
-  return { book, health, unreachable, changed, clearChanged, resync, resyncing, resyncError }
+  return { book, markSeen, health, unreachable, changed, clearChanged, resync, resyncing, resyncError }
 }
