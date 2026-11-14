@@ -2,7 +2,7 @@
 title: 'Live sync backend: MCP queue, snapshots, polling, health (stories 1.1-1.4)'
 type: 'feature'
 created: '2026-11-14'
-status: 'in-review'
+status: 'superseded'
 route: 'dispatch'
 baseline_commit: 'NO_VCS'
 review_loop_iteration: 0
