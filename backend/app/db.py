@@ -79,6 +79,19 @@ class DB:
                    tool, key(args)).fetchone()
         return (json.loads(r[0]), r[1]) if r else None
 
+    def snapshot_at(self, tool, args, t):
+        """-> (payload, fetched_at) the snapshot in force at `t` (latest at or before it), else the first one."""
+        for sql in ("SELECT payload, fetched_at FROM snapshots WHERE tool=? AND args=? AND fetched_at<=? ORDER BY id DESC LIMIT 1",
+                    "SELECT payload, fetched_at FROM snapshots WHERE tool=? AND args=? AND fetched_at>? ORDER BY id LIMIT 1"):
+            r = self.x(sql, tool, key(args), t).fetchone()
+            if r:
+                return json.loads(r[0]), r[1]
+        return None
+
+    def signals_since(self, t):
+        rows = self.x("SELECT payload, first_seen FROM signals WHERE first_seen>? ORDER BY first_seen", t).fetchall()
+        return [(json.loads(p), f) for p, f in rows]
+
     def latest_all(self):
         rows = self.x("SELECT tool, args, MAX(fetched_at) FROM snapshots GROUP BY tool, args ORDER BY tool, args")
         return [(t, json.loads(a), f) for t, a, f in rows.fetchall()]

@@ -8,7 +8,7 @@ from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .book import build_book
+from .book import build_book, what_changed
 from .db import DB
 from .health import health
 from .mcp import McpClient
@@ -104,10 +104,13 @@ def get_changes(since: int = 0):
 
 
 @app.get("/api/book")
-def get_book():
+def get_book(since: float | None = None):
     db = _db()
     try:
-        return build_book(db)
+        book = build_book(db)
+        if since is not None and book["accounts"]:  # What Changed: ?since=<epoch seconds of last visit>
+            book["changes"] = what_changed(db, since)
+        return book
     finally:
         db.close()
 

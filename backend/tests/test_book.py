@@ -1,6 +1,6 @@
 import pytest
 
-from app.book import ReceiptError, build_book, check_receipts
+from app.book import ReceiptError, build_book, check_receipts, what_changed
 from app.mcp import unwrap
 from tests.test_worker import db, fixture  # noqa: F401  (db is a pytest fixture)
 
@@ -192,3 +192,36 @@ def test_q4_without_paperwork_or_signals(db):
     assert q["loaded"] is False and q["signals_loaded"] is False
     assert not of(q, "renewal") and not of(q, "cold") and q["gaps"]
     assert [i["kind"] for i in q["items"]] == ["stuck"] * 4  # 3 open blockers + 1 undated deadline, all from the export
+
+
+# ---- story 5.1: what we still do not know; 7.1 what changed ----
+def test_q5_gaps(db):
+    a, b = (load4(db)[k]["q5"] for k in "AB")
+    ga = {g["text"]: g for g in a["gaps"]}
+    pa = ga["Any finance contact, at the alliance or at a force."]
+    assert pa["kind"] == "profile" and pa["who_could_fill"] == "not on file" and {"id": "A/profile.json", "kind": "record"} in pa["receipts"]
+    assert any(g["kind"] == "unpriced" and g["deals"][0]["id"] == "a_tarn" and g["value_at_stake"] is None for g in a["gaps"])
+    cl = next(g for g in a["gaps"] if g["kind"] == "claim")  # claim-only fact: the speaker is the person named in the record
+    assert cl["who_could_fill"] and cl["receipts"][0]["kind"] == "fact"
+    gb = [g for g in b["gaps"] if g["deals"] and g["deals"][0]["id"] == "b_idle" and g["kind"] == "deadline"]
+    assert gb and gb[0]["deals"][0]["value"] == 180000 and gb[0]["value_at_stake"] == 180000
+    assert any(g["kind"] == "file" and "plant 12" in g["text"] and "2026-08" in g["text"] for g in b["gaps"])
+    assert any(g["kind"] == "power" and g["text"].startswith("could_block") for g in a["gaps"])
+
+
+def test_q5_no_paperwork(db):
+    db.add_snapshot("get_my_accounts", {}, unwrap(fixture("get_my_accounts", {})), 1000.0)
+    q = build_book(db, strict=True, today=TODAY)["accounts"]["B"]["q5"]
+    assert q["loaded"] is False and not any(g["kind"] == "profile" for g in q["gaps"])
+
+
+def test_what_changed(db):
+    load4(db)  # snapshots at t=1000
+    db.add_signal({"id": "s_new", "account": "A", "title": "late"}, 2000.0)
+    ma = unwrap(fixture("get_my_accounts", {}))
+    ma["accounts"][0]["opportunities"][0]["stage"] = "closed"
+    db.add_snapshot("get_my_accounts", {}, ma, 3000.0)
+    c = what_changed(db, 1500.0, today=TODAY)
+    assert [s["id"] for s in c["new_signals"]] == ["s_new"] and c["new_signals"][0]["receipts"] == [{"id": "s_new", "kind": "signal"}]
+    assert [(m["deal"], m["stage"]["to"]) for m in c["moved"]] == [(ma["accounts"][0]["opportunities"][0]["id"], "closed")]
+    assert what_changed(db, 5000.0, today=TODAY)["moved"] == [] and c["new_deals"] == []
