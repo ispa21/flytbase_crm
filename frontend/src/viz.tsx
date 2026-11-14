@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './viz.css'
-import type { Account, DealPower, Entry, Q4, RoleKey } from './api'
-import { describe } from './home'
+import type { Account, Q4 } from './api'
 import { reducedMotion } from './live'
-import { BANDS, NOT_ON_FILE, dealValue, type Deal } from './ui'
+import { BANDS, NO_CUR, ReceiptsPop, bandName, countLabel, dealValue, money, type Deal } from './ui'
 
 /* Every drawing here is plain SVG, canvas or HTML, and every mark has a text twin and a "why" list of the records behind it. */
 
@@ -42,8 +41,7 @@ export function RiskTimeline({ q4, deal }: { q4: Q4; deal?: string | null }) {
             return <i key={n} className={`rtl-dot ${d.i.level ?? 'watch'}`} style={{ left: `${left}%`, top: n % 2 ? 34 : 6 }} title={`${d.i.text} (${d.i.turns_bad_on})`} />
           })}
         </div>)}
-      {undated > 0 && <p className="muted small">{undated} {undated === 1 ? 'item has' : 'items have'} no turn date on file, so {undated === 1 ? 'it is' : 'they are'} not on the line.</p>}
-      <p className="muted small">The line starts today ({q4.today}). A dot sits where a record says the risk turns bad; the list above gives each one with its receipts.</p>
+      {undated > 0 && <span className="muted small">+{undated} with no turn date</span>}
     </div>
   )
 }
@@ -117,7 +115,6 @@ export function SignalField({ deals }: { deals: Deal[] }) {
     const r = ref.current!.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top
     return hit.current.find(p => (p.x - x) ** 2 + (p.y - y) ** 2 < 18 ** 2)
   }
-  const counts = LANES.map(k => pts.filter(p => p.d.band === k).length)
   const reds = deals.filter(d => d.risk === 'red').length
   return (
     <section className="field" aria-label="The book at a glance">
@@ -126,53 +123,42 @@ export function SignalField({ deals }: { deals: Deal[] }) {
           onMouseLeave={() => setTip(null)} onClick={e => { const p = near(e); if (p) window.location.hash = `#/deals/${p.d.acct}/${encodeURIComponent(p.d.key)}` }} />
         {tip && <div className="field-tip" style={{ left: tip.x, top: tip.y }}><b>{tip.d.title}</b><span>{tip.d.acct.toUpperCase()} · {BANDS.find(b => b.key === tip.d.band)!.label}{dealValue(tip.d) ? ` · ${dealValue(tip.d)}` : ''}</span></div>}
       </div>
-      <p className="field-key">One dot per deal, placed in the band its evidence supports. Letter is the account. A pulsing ring means a red risk is on file. <b>{counts.join(' · ')}</b> deals across the four bands{reds ? `, ${reds} flagged red` : ''}. Click a dot to open the deal.</p>
+      <p className="field-key"><b>{countLabel(deals.map(d => d.kind))}</b>{reds ? <> · <b>{reds}</b> red (pulsing ring)</> : null} · click a dot to open</p>
       <ul className="sr-only">{deals.map(d => <li key={d.acct + d.key}><a href={`#/deals/${d.acct}/${encodeURIComponent(d.key)}`}>{d.title}, {BANDS.find(b => b.key === d.band)!.label}</a></li>)}</ul>
     </section>
   )
 }
 
-// ---------- power map: the people around one deal, by the role they hold ----------
-const STAND_VAR: Record<string, string> = { warm: '--contract', ally: '--contract', neutral: '--backed', guarded: '--amber', cold: '--red' }
-const ROLE_POS: { k: RoleKey; label: string; left: boolean; top: boolean }[] = [
-  { k: 'decides', label: 'Decides', left: true, top: true }, { k: 'pays', label: 'Pays', left: false, top: true },
-  { k: 'uses', label: 'Uses', left: true, top: false }, { k: 'could_block', label: 'Could block', left: false, top: false },
-]
-const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + '…' : s)
-export function PowerMap({ p }: { p: DealPower }) {
-  const cx = 320, cy = 170
-  const summary = ROLE_POS.map(r => `${r.label}: ${(p.roles[r.k]?.entries ?? []).map(describe).join(', ') || 'not on file'}`).join('. ')
+// ---------- worth by band: one bar per priced band, scaled within one currency. Never summed, never mixed. ----------
+const PRICED = ['on_contract', 'backed_upside', 'unbacked'] as const
+export function WorthBars({ a }: { a: Account }) {
+  const t = a.q1?.totals
+  if (!a.q1 || !t) return <p className="muted">Worth not available yet</p>
+  const curs = [...new Set(PRICED.flatMap(k => Object.keys(t[k]?.by_currency ?? {})))]
+  const unpriced = a.q1.bands.unpriced.length
   return (
-    <figure className="pmap">
-      <svg viewBox="0 0 640 340" role="img" aria-label={`Power map. ${summary}`}>
-        <rect x={cx - 96} y={cy - 22} width="192" height="44" rx="10" className="pm-deal" />
-        <text x={cx} y={cy + 4} textAnchor="middle" className="pm-deal-t">{clip(p.title, 28)}</text>
-        {ROLE_POS.map(r => {
-          const entries: Entry[] = p.roles[r.k]?.entries ?? []
-          const shown = entries.slice(0, 3)
-          const y0 = r.top ? 56 : 226
-          const dx = r.left ? 150 : 490
-          const side = r.left ? 'end' : 'start'
-          return (
-            <g key={r.k}>
-              <text x={r.left ? dx - 12 : dx + 12} y={y0 - 24} textAnchor={side} className="pm-role">{r.label.toUpperCase()}</text>
-              {(shown.length ? shown : [null]).map((e, i) => {
-                const y = y0 + i * 30
-                const col = e?.stands ? `var(${STAND_VAR[e.stands.toLowerCase()] ?? '--muted'})` : 'var(--muted)'
-                return (
-                  <g key={i} className="pm-node" style={{ animationDelay: `${120 + i * 70}ms` }}>
-                    <path d={`M${dx} ${y} C ${r.left ? 240 : 400} ${y}, ${r.left ? 230 : 410} ${cy}, ${r.left ? cx - 96 : cx + 96} ${cy}`} pathLength="1" className={`pm-edge${e ? '' : ' none'}`} />
-                    <circle cx={dx} cy={y} r="7" fill={e ? col : 'var(--card)'} stroke={col} strokeWidth="2" strokeDasharray={e ? undefined : '3 3'} />
-                    <text x={r.left ? dx - 14 : dx + 14} y={y + 4} textAnchor={side} className={e ? 'pm-name' : 'pm-none'}>{e ? clip(describe(e), 30) : NOT_ON_FILE}</text>
-                    {e?.stands && e.stands !== NOT_ON_FILE && <text x={r.left ? dx - 14 : dx + 14} y={y + 17} textAnchor={side} className="pm-stand">{e.stands}</text>}
-                    <title>{e ? describe(e) : `${r.label}: ${NOT_ON_FILE}`}</title>
-                  </g>)
-              })}
-              {entries.length > 3 && <text x={r.left ? dx - 14 : dx + 14} y={y0 + 3 * 30 + 4} textAnchor={side} className="pm-none">+{entries.length - 3} more below</text>}
-            </g>)
-        })}
-      </svg>
-      <figcaption className="muted small">Lines run from each person to the deal. Dot colour is where they stand with you (warm, neutral, guarded, cold); a dashed dot means nobody is on file for that role. The table below lists every entry with its receipts.</figcaption>
-    </figure>
+    <div className="worth">
+      {curs.map(c => {
+        const max = Math.max(...PRICED.map(k => t[k]?.by_currency[c] ?? 0))
+        return (
+          <div key={c} className="wb" role="group" aria-label={`Worth in ${c === NO_CUR ? 'an unknown currency' : c}`}>
+            {curs.length > 1 && <span className="label">{c === NO_CUR ? 'currency not on file' : c}</span>}
+            {PRICED.map(k => {
+              const n = t[k]?.by_currency[c]
+              return (
+                <div key={k} className={`wb-row band-${k}`}>
+                  <span className="wb-name"><span className="mark" aria-hidden="true" />{bandName(k)}</span>
+                  <span className="wb-track" aria-hidden="true">{n ? <i style={{ transform: `scaleX(${n / max})`, background: `var(${BAND_VAR[k]})` }} /> : null}</span>
+                  {n != null ? <ReceiptsPop label={money(n, c)} rs={t[k].receipts} /> : <span className="wb-v muted">none</span>}
+                </div>)
+            })}
+          </div>)
+      })}
+      {!curs.length && <p className="muted small">Nothing priced on file</p>}
+      <div className="wb-row band-unpriced">
+        <span className="wb-name"><span className="mark" aria-hidden="true" />{bandName('unpriced')}</span><span className="wb-track" aria-hidden="true" />
+        <span className="wb-v">{unpriced} {unpriced === 1 ? 'deal' : 'deals'}</span>
+      </div>
+    </div>
   )
 }

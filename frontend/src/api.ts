@@ -30,7 +30,21 @@ export type Move = {
   draft_note: { kind: string; text: string }
 }
 export type Q3 = { loaded: boolean; moves: Move[] }
-export type Account = { name: string | null; q1?: Q1; q2?: Q2; q3?: Q3; q4?: Q4; q5?: Q5 }
+// risk radar: one row per deal, three dimensions, each a RAG cell. 'unknown' = not on file, never green.
+export type Level = 'red' | 'amber' | 'green' | 'unknown'
+export type RagCell = { level: Level; label: string; date: string | null; receipts: Receipt[] }
+export type Dim = 'deadline' | 'cold' | 'blocked'
+export type RadarDeal = { deal: { id: string | null; title: string; band: BandKey; value: number | null; currency: string | null; kind?: string } } & Record<Dim, RagCell>
+export type Radar = { deals: RadarDeal[]; counts?: Record<Dim, Partial<Record<Level, number>>> }
+// power map: per deal, who holds each role
+export type PowerRole = 'decides' | 'pays' | 'uses' | 'blocks' | 'champion'
+export type Waiting = { text: string; since: string | null; receipts: Receipt[] }
+export type PowerPerson = {
+  id: string | null; name: string; title: string | null; side: 'customer' | 'flytbase' | 'org'; relationship: string
+  basis: 'record' | 'inferred'; why?: string; waiting_on?: Waiting[]; receipts: Receipt[]
+}
+export type PowerDeal = { deal: { id: string | null; title: string; band: BandKey }; roles: Partial<Record<PowerRole, PowerPerson[]>>; gaps?: PowerRole[] }
+export type Account = { name: string | null; q1?: Q1; q2?: Q2; q3?: Q3; q4?: Q4; q5?: Q5; radar?: Radar; power?: { deals: PowerDeal[] } }
 export type Gap = {
   kind: string; text: string; deals: { id: string; title: string; value: number | null; currency: string }[]
   value_at_stake: number | null; unpriced_deals: number; who_could_fill: string; receipts: Receipt[]

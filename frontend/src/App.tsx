@@ -6,7 +6,9 @@ import { AccountsPage } from './accounts'
 import { Home } from './home'
 import { Ago, ToastHost, toast } from './live'
 import { ActivityPage, DealPage, DealsPage, MovesPage, NotesPage, PeoplePage, SyncPage, dealHref } from './pages'
-import { Failed, Icon, bandName, dealsOf, when } from './ui'
+import { PowerPage } from './power'
+import { RadarPage } from './radar'
+import { Failed, Icon, bandName, dealsOf, shortName, when } from './ui'
 
 export { money } from './ui'
 
@@ -14,6 +16,8 @@ const NAV = [
   { path: 'home', label: 'Home', icon: 'home', key: 'h' },
   { path: 'accounts', label: 'Accounts', icon: 'accounts', key: 'c' },
   { path: 'deals', label: 'Deals', icon: 'deals', key: 'd' },
+  { path: 'radar', label: 'Risk radar', icon: 'radar', key: 'r' },
+  { path: 'power', label: 'Power map', icon: 'power', key: 'w' },
   { path: 'people', label: 'People', icon: 'people', key: 'p' },
   { path: 'activity', label: 'Activity', icon: 'activity', key: 'a' },
   { path: 'moves', label: 'Moves', icon: 'moves', key: 'm' },
@@ -41,7 +45,7 @@ function useTheme() {
 // ---------- command palette + global search ----------
 type Hit = { key: string; group: string; label: string; sub?: string; to: string }
 function Palette({ open, setOpen }: { open: boolean; setOpen: (o: boolean) => void }) {
-  const { book } = useData()
+  const { book, names } = useData()
   const ppl = useApi<{ people: Person[] }>(open ? '/api/people' : null)
   const act = useApi<{ items: ActivityItem[] }>(open ? '/api/activity' : null)
   const [q, setQ] = useState(''); const [i, setI] = useState(0)
@@ -53,11 +57,11 @@ function Palette({ open, setOpen }: { open: boolean; setOpen: (o: boolean) => vo
     const has = (...v: (string | null | undefined)[]) => v.join(' ').toLowerCase().includes(s)
     return [
       ...pages.filter(p => has(p.label)),
-      ...dealsOf(book).filter(d => has(d.title, d.id)).slice(0, 6).map(d => ({ key: `d${d.acct}${d.key}`, group: 'Deals', label: d.title, sub: `${d.acct.toUpperCase()} · ${bandName(d.band)}`, to: dealHref(d).slice(2) })),
-      ...(ppl.data?.people ?? []).filter(p => has(p.name, p.title, p.org)).slice(0, 5).map(p => ({ key: `u${p.id}`, group: 'People', label: p.name, sub: `${p.account.toUpperCase()} · ${p.title ?? p.org ?? ''}`, to: 'people' })),
-      ...(act.data?.items ?? []).filter(a => has(a.title, a.summary)).slice(0, 5).map(a => ({ key: `a${a.id}`, group: 'Activity', label: a.title, sub: `${a.kind} · ${a.account.toUpperCase()}`, to: 'activity' })),
+      ...dealsOf(book).filter(d => has(d.title, d.id)).slice(0, 6).map(d => ({ key: `d${d.acct}${d.key}`, group: 'Deals', label: d.title, sub: `${names[d.acct] ?? d.acct} · ${bandName(d.band)}`, to: dealHref(d).slice(2) })),
+      ...(ppl.data?.people ?? []).filter(p => has(p.name, p.title, p.org)).slice(0, 5).map(p => ({ key: `u${p.id}`, group: 'People', label: p.name, sub: `${names[p.account] ?? p.account} · ${p.title ?? p.org ?? ''}`, to: 'people' })),
+      ...(act.data?.items ?? []).filter(a => has(a.title, a.summary)).slice(0, 5).map(a => ({ key: `a${a.id}`, group: 'Activity', label: a.title, sub: `${a.kind} · ${names[a.account] ?? a.account}`, to: 'activity' })),
     ]
-  }, [q, book, ppl.data, act.data])
+  }, [q, book, names, ppl.data, act.data])
   const pick = (h?: Hit) => { if (!h) return; setOpen(false); go(h.to) }
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); setI(x => Math.min(x + 1, hits.length - 1)) }
@@ -163,6 +167,8 @@ export default function App() {
   if (route === 'deals' && parts[1] && parts[2]) page = <DealPage acct={parts[1]} k={parts[2]} />
   else if (route === 'accounts') page = <AccountsPage route={parts} />
   else if (route === 'deals') page = <DealsPage />
+  else if (route === 'radar') page = <RadarPage />
+  else if (route === 'power') page = <PowerPage key={parts.join('/')} route={parts} />
   else if (route === 'people') page = <PeoplePage />
   else if (route === 'activity') page = <ActivityPage />
   else if (route === 'moves') page = <MovesPage />
@@ -176,18 +182,25 @@ export default function App() {
       <div className="shell" onPointerDown={clearChanged}>
         <a className="skip" href="#main" onClick={e => { e.preventDefault(); document.getElementById('main')?.focus() }}>Skip to content</a>
         <aside className="side" aria-label="Primary">
-          <div className="brand">Book<b>Tool</b></div>
+          <div className="brand" aria-hidden="true"><Icon n="radar" size={20} /></div>
           <nav className="nav">{links('nav-link')}</nav>
-          <p className="side-foot muted small">Keys: g then h d p a m n s. ⌘K searches.</p>
+          <p className="side-foot muted small"><kbd>g</kbd> + key to jump · <kbd>⌘K</kbd> search</p>
         </aside>
         <div className="content">
           <header className={`bar${banner ? ' stale' : ''}`}>
             <button type="button" className="icon-btn menu-btn" aria-label="Open navigation" onClick={() => setNav(true)}><Icon n="menu" /></button>
             <button type="button" className="search" onClick={() => setPalette(true)} aria-label="Search deals, people, activity"><Icon n="search" size={16} /><span>Search</span><kbd>⌘K</kbd></button>
-            <div className="seg acct" role="group" aria-label="Account filter">
-              {['all', ...accounts.map(([id]) => id)].map(id => (
-                <button key={id} type="button" aria-pressed={account === id} title={id === 'all' ? 'All accounts' : names[id]} onClick={() => setAccount(id)}>{id === 'all' ? 'All' : id.toUpperCase()}</button>))}
-            </div>
+            {accounts.length <= 3 ? (
+              <div className="seg acct" role="group" aria-label="Account filter">
+                {['all', ...accounts.map(([id]) => id)].map(id => (
+                  <button key={id} type="button" aria-pressed={account === id} title={id === 'all' ? undefined : names[id]} onClick={() => setAccount(id)}>{id === 'all' ? 'All accounts' : shortName(names[id])}</button>))}
+              </div>
+            ) : (
+              <select className="acct" aria-label="Account filter" value={account} onChange={e => setAccount(e.target.value)}>
+                <option value="all">All accounts</option>
+                {accounts.map(([id]) => <option key={id} value={id}>{names[id]}</option>)}
+              </select>)}
+            <span className="viewing" role="status">Viewing: <b>{account === 'all' ? 'All accounts' : names[account] ?? account}</b></span>
             <span className="chip" title={book?.as_of ?? undefined}><i className="dot" aria-hidden="true" />{banner ? `Stale${asOf ? ` · as of ${asOf}` : ''}` : asOf ? `As of ${asOf} · live` : 'Waiting for first sync'}{!banner && asOf && <Ago iso={health?.last_good_poll} />}</span>
             <Bell onSeen={markSeen} />
             <button type="button" className="icon-btn" onClick={toggleTheme} aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}><Icon n={theme === 'dark' ? 'sun' : 'moon'} /></button>
@@ -204,7 +217,7 @@ export default function App() {
           <Dialog.Portal>
             <Dialog.Backdrop className="scrim" />
             <Dialog.Popup className="drawer left">
-              <div className="row between"><Dialog.Title className="drawer-title">Book Tool</Dialog.Title><Dialog.Close className="icon-btn" aria-label="Close navigation"><Icon n="close" /></Dialog.Close></div>
+              <div className="row between"><Dialog.Title className="drawer-title">Menu</Dialog.Title><Dialog.Close className="icon-btn" aria-label="Close navigation"><Icon n="close" /></Dialog.Close></div>
               <nav className="nav">{links('nav-link')}</nav>
             </Dialog.Popup>
           </Dialog.Portal>

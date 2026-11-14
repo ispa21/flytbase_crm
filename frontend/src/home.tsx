@@ -2,7 +2,8 @@ import { Count } from './live'
 import { MiniBar, RiskTimeline, SignalField } from './viz'
 import { Collapsible } from '@base-ui/react/collapsible'
 import type { Account, Book, BandKey, Changes, DealPower, Entry, Gap, Line, Q4, Q5, RiskItem, RoleKey } from './api'
-import { BANDS, Chev, NOT_ON_FILE, NO_CUR, Receipts, bandName, dealsOf, money, turns } from './ui'
+import { BANDS, Chev, Info, NOT_ON_FILE, NO_CUR, Receipts, Stat, WorthInfo, bandName, countLabel, dealsOf, dueIn, kindOf, money, turns } from './ui'
+import { RadarMini } from './radar'
 
 function leadOf(a: Account) {
   const l = a.q1?.bands.on_contract.find(x => x.renewal_risk && x.term_ends && x.value != null && x.currency)
@@ -65,13 +66,6 @@ function Power({ p }: { p: DealPower }) {
   )
 }
 
-const BAND_HINT: Record<BandKey, string> = {
-  on_contract: 'Signed and backed by the contract file',
-  backed_upside: 'Open deals a file or a verified fact backs',
-  unbacked: 'Rests on a claim only',
-  unpriced: 'No value on file',
-}
-
 function Band({ k, label, apart, acc, aid, changed }: { k: BandKey; label: string; apart?: boolean; acc: Account; aid: string; changed: Set<string> }) {
   const q1 = acc.q1!
   const lines = q1.bands[k]
@@ -87,7 +81,7 @@ function Band({ k, label, apart, acc, aid, changed }: { k: BandKey; label: strin
           {cur.length ? cur.map(([c, n]) => <span key={c} className="amt-line"><b><Count n={n} fmt={x => money(x, c)} /></b>{c === NO_CUR && <i>currency not on file</i>}</span>)
             : <span className="none">{k === 'unpriced' ? 'no value yet' : 'none'}</span>}
         </span>
-        <span className="band-sub">{lines.length} {lines.length === 1 ? 'deal' : 'deals'} · {BAND_HINT[k]}</span>
+        <span className="band-sub">{lines.length} {lines.length === 1 ? 'deal' : 'deals'}</span>
         {k !== 'unpriced' && cur.length === 1 && <MiniBar acc={acc} band={k} currency={cur[0][0]} />}
       </Collapsible.Trigger>
       <Collapsible.Panel className="panel">
@@ -142,7 +136,6 @@ function Risks({ q4 }: { q4: Q4 }) {
         <Chev />
         <span className="band-name"><span>Slipping</span></span>
         <span className="amt"><span className="amt-line"><b>{items.length}</b><i>{items.length === 1 ? 'item' : 'items'}</i></span></span>
-        <span className="band-sub">Deadlines at risk, people going cold, deals stuck</span>
       </Collapsible.Trigger>
       <Collapsible.Panel className="panel">
         <div className="panel-in">
@@ -247,13 +240,14 @@ export const Skeleton = () => (
 export function Column({ aid, acc, changed }: { aid: string; acc: Account; changed: Set<string> }) {
   const lead = leadOf(acc)
   const urgent = acc.q4?.items?.[0]
-  const deals = acc.q1 ? Object.values(acc.q1.bands).reduce((n, ls) => n + ls.length, 0) : 0
+  const kinds = acc.q1 ? Object.values(acc.q1.bands).flat().map(kindOf) : []
+  const due = dueIn(acc.q3?.moves ?? [], acc.q4?.today ?? new Date().toISOString().slice(0, 10))
   const kick = urgent?.level === 'red' ? 'red' : urgent?.level === 'amber' ? 'amber' : ''
   return (
     <section className="column" aria-label={acc.name ?? aid}>
       <div className="head">
         <h2>{acc.name ?? aid}</h2>
-        {acc.q1 && <span className="muted">{deals} {deals === 1 ? 'deal' : 'deals'}</span>}
+        {acc.q1 && <span className="muted">{countLabel(kinds)}</span>}
       </div>
       {(lead || urgent) ? (
         <div className="lead">
@@ -274,27 +268,27 @@ export function Column({ aid, acc, changed }: { aid: string; acc: Account; chang
       ) : null}
       {acc.q1 ? (
         <div className="sec">
-          <div className="sec-h"><h3>Worth</h3></div>
+          <div className="sec-h"><h3>Worth</h3><Info><WorthInfo /></Info></div>
           {BANDS.map((b, i) => (
             <div key={b.key} className="ledger-row">
-              {i === 2 && <div className="ledger-sub">Held apart: never added to a total</div>}
+              {i === 2 && <div className="ledger-sub">Held apart</div>}
               <Band k={b.key} label={b.label} apart={b.apart} acc={acc} aid={aid} changed={changed} />
             </div>
           ))}
         </div>
-      ) : <p className="empty">No value data for this account yet. It will appear here as soon as the next sync brings it in.</p>}
+      ) : <p className="empty">Worth not available yet</p>}
       {!!acc.q3?.moves?.length && (
         <div className="sec">
-          <div className="sec-h"><h3>Do first</h3></div>
+          <div className="sec-h"><h3>Do first</h3><Stat n={due.week} label="due this week" />{due.late > 0 && <Stat n={due.late} label="late" tone="red" />}</div>
           <ol className="firsts">
             {acc.q3.moves.map(m => (
               <li key={m.rank}><span className="rank">{m.rank}</span>
-                <span><a className="link" href="#/moves">{m.action}</a><span className="muted"> · {m.owner} · due {m.due}</span></span></li>
+                <span><a className="link" href="#/moves">{m.action}</a><span className="muted"> · {m.owner} · <span className="nowrap">due {m.due}</span></span></span></li>
             ))}
           </ol>
         </div>
       )}
-      {acc.q4 && <div className="sec"><div className="sec-h"><h3>Going wrong</h3></div><Risks q4={acc.q4} /></div>}
+      {(acc.q4 || acc.radar) && <div className="sec"><div className="sec-h"><h3>Going wrong</h3></div>{acc.radar && <RadarMini acct={aid} radar={acc.radar} />}{acc.q4 && <Risks q4={acc.q4} />}</div>}
       {acc.q5 && <NotKnown q5={acc.q5} />}
     </section>
   )

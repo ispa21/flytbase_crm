@@ -30,8 +30,8 @@ afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
 test('data loaded: both accounts, bands, currency, receipts, as of', async () => {
   mock({ book: book(), health: ok, changes: { n: 1 } })
   render(<App />)
-  expect(await screen.findByText('Acme')).toBeInTheDocument()
-  expect(screen.getByText('Beta')).toBeInTheDocument()
+  expect(await within(screen.getByRole('main')).findByText('Acme')).toBeInTheDocument()
+  expect(within(screen.getByRole('main')).getByText('Beta')).toBeInTheDocument()
   expect(screen.getAllByText('On contract')).toHaveLength(2)
   expect(screen.getAllByText('£100,000').length).toBeGreaterThan(0)
   expect(screen.getAllByText('d1').length).toBeGreaterThan(0)
@@ -61,7 +61,7 @@ test('unreachable: banner, nothing shown as current', async () => {
 test('missing later answers: no q2..q5 sections', async () => {
   mock({ book: book(), health: ok, changes: { n: 1 } })
   render(<App />)
-  await screen.findByText('Acme')
+  await within(screen.getByRole('main')).findByText('Acme')
   expect(within(screen.getByRole('main')).queryByText(/Do first|Slipping|People|Not known/)).toBeNull()
 })
 
@@ -69,7 +69,7 @@ test('new data: counter moves, refetch, New tag only on changed', async () => {
   vi.useFakeTimers({ shouldAdvanceTime: true })
   const f = mock({ book: book(), health: ok, changes: { n: 1 } })
   render(<App />)
-  await screen.findByText('Acme')
+  await within(screen.getByRole('main')).findByText('Acme')
   const changedBook = book({ accounts: { a: { name: 'Acme', q1: q1({ bands: { ...q1().bands, backed_upside: [line('d9', 7000)] } }) }, b: { name: 'Beta', q1: q1() } } })
   f.mockImplementation(async (url: string) => ({ ok: true, json: async () => (url.startsWith('/api/book') ? changedBook : url.startsWith('/api/health') ? ok : { n: 2 }) }))
   await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
@@ -81,7 +81,7 @@ const post = (f: any, u: string) => f.mock.calls.filter((c: any[]) => c[0] === u
 test('poke on load, errors ignored', async () => {
   const f = mock({ book: book(), health: ok, changes: { n: 1 } })
   render(<App />)
-  await screen.findByText('Acme')
+  await within(screen.getByRole('main')).findByText('Acme')
   expect(post(f, '/api/poke')).toHaveLength(1)
 })
 
@@ -94,7 +94,7 @@ test('resync success: POSTs, disables while in flight, shows progress', async ()
     return { ok: true, json: async () => (url.startsWith('/api/book') ? book() : url.startsWith('/api/health') ? h : { n: 1 }) }
   })
   render(<App />)
-  await screen.findByText('Acme')
+  await within(screen.getByRole('main')).findByText('Acme')
   fireEvent.click(screen.getByRole('button', { name: 'Resync now' }))
   expect(await screen.findByRole('button', { name: 'Resyncing…' })).toBeDisabled()
   await act(async () => release())
@@ -107,7 +107,7 @@ test('resync failure: error line shown', async () => {
   f.mockImplementation(async (url: string) => url === '/api/resync' ? { ok: false, status: 500, json: async () => ({}) }
     : { ok: true, json: async () => (url.startsWith('/api/book') ? book() : url.startsWith('/api/health') ? ok : { n: 1 }) })
   render(<App />)
-  await screen.findByText('Acme')
+  await within(screen.getByRole('main')).findByText('Acme')
   fireEvent.click(screen.getByRole('button', { name: 'Resync now' }))
   expect(await screen.findByText(/Resync failed \(500\)/)).toBeInTheDocument()
 })
@@ -146,7 +146,7 @@ const q4 = {
 test('q4: most urgent in lead, ordered list with turns-bad-on and receipts, gaps', async () => {
   mock({ book: book({ accounts: { a: { name: 'Acme', q1: q1(), q4 }, b: { name: 'Beta', q1: q1() } } }), health: ok, changes: { n: 1 } })
   render(<App />)
-  await screen.findByText('Acme')
+  await within(screen.getByRole('main')).findByText('Acme')
   expect(screen.getAllByText(q4.items[0].text)).toHaveLength(1) // lead only, list collapsed
   fireEvent.click(screen.getByRole('button', { name: /Slipping/ }))
   await waitFor(() => expect(screen.getAllByText(q4.items[0].text)).toHaveLength(2))
@@ -161,7 +161,7 @@ test('q4: most urgent in lead, ordered list with turns-bad-on and receipts, gaps
 test('q2: per-deal power in the expanded row, gaps shown as not on file', async () => {
   mock({ book: book({ accounts: { a: { name: 'Acme', q1: q1(), q2 }, b: { name: 'Beta', q1: q1() } } }), health: ok, changes: { n: 1 } })
   render(<App />)
-  await screen.findByText('Acme')
+  await within(screen.getByRole('main')).findByText('Acme')
   fireEvent.click(screen.getAllByRole('button', { name: /On contract/ })[0])
   fireEvent.click(await screen.findByRole('button', { name: /Who decides, pays/ }))
   expect(await screen.findByText('Priya Nair, COO')).toBeInTheDocument()
@@ -175,7 +175,7 @@ test('q2: per-deal power in the expanded row, gaps shown as not on file', async 
 test('no q2/q4 keys: no power or slipping sections', async () => {
   mock({ book: book(), health: ok, changes: { n: 1 } })
   render(<App />)
-  await screen.findByText('Acme')
+  await within(screen.getByRole('main')).findByText('Acme')
   expect(screen.queryByText(/Slipping|Who decides/)).toBeNull()
 })
 
@@ -195,7 +195,7 @@ const q5 = {
 test('q5: gaps ordered by value, per-currency, who could fill, receipts on demand; absent key = nothing', async () => {
   mock({ book: book({ accounts: { a: { name: 'Acme', q1: q1(), q5 }, b: { name: 'Beta', q1: q1() } } }), health: ok, changes: { n: 1 } })
   render(<App />)
-  await screen.findByText('Acme')
+  await within(screen.getByRole('main')).findByText('Acme')
   expect(screen.getAllByText('Not known yet')).toHaveLength(1)
   const heads = screen.getAllByRole('button', { name: /gap/ }).map(b => b.textContent)
   expect(heads.map(h => h!.match(/Big|Small|No deal/)![0])).toEqual(['Big', 'Small', 'No deal'])
@@ -233,7 +233,7 @@ test('what changed: no key = no strip; storage failure does not break the page',
   vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked') })
   mock({ book: book(), health: ok, changes: { n: 1 } })
   render(<App />)
-  await screen.findByText('Acme')
+  await within(screen.getByRole('main')).findByText('Acme')
   expect(screen.queryByText('What changed')).toBeNull()
   vi.restoreAllMocks()
 })

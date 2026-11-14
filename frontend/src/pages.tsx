@@ -3,11 +3,13 @@ import { Dialog } from '@base-ui/react/dialog'
 import { postNote, useApi, useData, type ActivityItem, type ActivityKind, type Health, type Move, type Note, type NoteStatus, type Person, type Receipt } from './api'
 import { PowerGrid, GapRow } from './home'
 import { toast } from './live'
-import { PowerMap, RiskTimeline, StandMeter } from './viz'
-import { Avatar, BandChip, BANDS, Empty, Failed, Icon, Loading, NotAvailable, NOT_ON_FILE, PageHead, Receipts, Tag, allMoves, dealValue, dealsOf, day, riskLabel, turns, uniq, when, type Deal } from './ui'
+import { RiskTimeline, StandMeter } from './viz'
+import { PowerView } from './power'
+import { DIMS, RagChip } from './radar'
+import { Avatar, BandChip, BANDS, Empty, Failed, Icon, Loading, NotAvailable, NOT_ON_FILE, PageHead, Receipts, Stat, Tag, WorthInfo, allMoves, countLabel, dealHref, dealKey, dealValue, dealsOf, day, dueIn, riskLabel, todayOf, turns, uniq, when, type Deal } from './ui'
+export { dealHref }
 
-const acctLabel = (names: Record<string, string>, id: string) => `${id.toUpperCase()} · ${names[id] ?? id}`
-export const dealHref = (d: { acct: string; key: string }) => `#/deals/${d.acct}/${encodeURIComponent(d.key)}`
+const acctLabel = (names: Record<string, string>, id: string) => names[id] ?? id
 const sameAcct = (account: string, id: string) => account === 'all' || account === id
 
 // ---------- notes: status + approve/save ----------
@@ -33,7 +35,7 @@ function SaveBox({ account, deal, initial, kind, label, source, onSaved, rows = 
     <div className="savebox">
       <label className="label" htmlFor={`n-${label}-${deal ?? account}`}>Note text</label>
       <textarea id={`n-${label}-${deal ?? account}`} rows={rows} value={text} onChange={e => setText(e.target.value)} />
-      <p className="muted small">{kind ? `Kind: ${kind} · ` : ''}Account: {acctLabel(names, account)}{deal ? ` · Deal: ${deal}` : ''}. Nothing is written until you press the button.</p>
+      <p className="muted small mono">{[kind, acctLabel(names, account), deal].filter(Boolean).join(' · ')}</p>
       <div className="row">
         <button type="button" className="btn primary" disabled={!!blocked || phase === 'saving'} aria-describedby={blocked ? `why-${label}-${deal ?? account}` : undefined} onClick={save}>{label}</button>
         {phase && <StatusPill s={phase} />}
@@ -46,7 +48,7 @@ function SaveBox({ account, deal, initial, kind, label, source, onSaved, rows = 
 
 // ---------- Moves ----------
 function MoveCard({ m, acct, onSaved }: { m: Move & { acct: string }; acct: string; onSaved: () => void }) {
-  const { names, book } = useData()
+  const { book } = useData()
   const deal = dealsOf(book).find(d => d.acct === acct && d.id === m.deal?.id)
   const [open, setOpen] = useState(false)
   return (
@@ -57,20 +59,12 @@ function MoveCard({ m, acct, onSaved }: { m: Move & { acct: string }; acct: stri
           <p className="move-action">{m.action}</p>
           <div className="meta">
             <span>Owner <b>{m.owner}</b></span>
-            <span>Due <b className="num">{m.due}</b></span>
-            <span>Account <b>{acctLabel(names, acct)}</b></span>
-            {m.deal ? <span>Deal <a className="link" href={`#/deals/${acct}/${m.deal.id}`}>{m.deal.title}</a></span> : <span className="muted">No single deal</span>}
+            <span>Due <b className="num">{m.due}</b>{m.due_basis && <span className="muted"> · {m.due_basis}</span>}</span>
+            {m.deal ? <span>Deal <a className="link" href={`#/deals/${acct}/${m.deal.id}`}>{m.deal.title}</a>{deal && dealValue(deal) ? <span className="num"> · {dealValue(deal)}</span> : null}</span> : <span className="muted">No single deal</span>}
             {m.with && m.with !== NOT_ON_FILE && <span>With <b>{m.with}</b></span>}
           </div>
-          {m.due_basis && <p className="muted small">Due basis: {m.due_basis}</p>}
-          <p><span className="label">Why now</span><br />{m.why_now}</p>
-          <ul className="rank-why" aria-label="Why this rank">
-            <li>Rank {m.rank} of {book?.accounts[acct]?.q3?.moves.length ?? m.rank} for this account</li>
-            {m.level && <li>{m.level === 'red' ? 'Red' : 'Amber'} risk on file{m.turns_bad_on && m.turns_bad_on !== NOT_ON_FILE ? `, turns bad ${m.turns_bad_on}` : ''}</li>}
-            <li>Due {m.due}{m.due_basis ? `: ${m.due_basis}` : ''}</li>
-            {m.deal && deal && <li>Moves {deal.title}{dealValue(deal) ? `, ${dealValue(deal)}` : ''}</li>}
-          </ul>
-          {m.level && <Tag level={m.level}>{m.level === 'red' ? 'Red' : 'Amber'}</Tag>} {m.turns_bad_on && m.turns_bad_on !== NOT_ON_FILE && <span className="muted small">Turns bad on {m.turns_bad_on}</span>}
+          <p className="why"><span className="label">Why now</span> {m.why_now}</p>
+          <div className="row">{m.level && <Tag level={m.level}>{m.level === 'red' ? 'Red' : 'Amber'}</Tag>}{m.turns_bad_on && m.turns_bad_on !== NOT_ON_FILE && <span className="muted small mono">Turns bad on {m.turns_bad_on}</span>}</div>
           <div className="receipt-row"><Receipts rs={m.receipts} /></div>
         </div>
       </div>
@@ -92,16 +86,17 @@ export function MovesPage() {
   const notes = useApi<{ notes: Note[] }>('/api/notes')
   if (!book) return unreachable ? <Failed what="moves" /> : <Loading />
   const ids = Object.keys(book.accounts).filter(id => sameAcct(account, id))
+  const mv = ids.flatMap(id => allMoves(book, id)), due = dueIn(mv, todayOf(book))
   return (
     <>
-      <PageHead title="Moves" sub="The first three moves per account, ranked. Each has an owner, a date inside its deadline and the deal it moves." />
+      <PageHead title="Moves" sub={<><Stat n={mv.length} label={mv.length === 1 ? 'move' : 'moves'} /><Stat n={due.week} label="due this week" /><Stat n={due.late} label="late" tone="red" /></>} />
       {ids.map(id => {
         const moves = allMoves(book, id)
         return (
           <section key={id} className="block" aria-label={acctLabel(names, id)}>
-            <h2 className="block-h"><span className="letter-sm">{id.toUpperCase()}</span>{names[id] ?? id}</h2>
+            <h2 className="block-h">{names[id] ?? id}</h2>
             {!book.accounts[id].q3 ? <Empty title="Moves are not computed yet">They appear after the next sync.</Empty>
-              : !moves.length ? <Empty title="No moves right now">Nothing on file asks for a first move. That is not an all-clear: see Not known on Home.</Empty>
+              : !moves.length ? <Empty title="No moves right now">Not an all-clear: check Not known.</Empty>
               : <ol className="stack">{moves.map(m => <MoveCard key={m.rank} m={m} acct={id} onSaved={notes.reload} />)}</ol>}
           </section>
         )
@@ -118,10 +113,12 @@ export function NotesPage() {
   if (state === 'loading') return <><PageHead title="Notes" /><Loading /></>
   if (state === 'na') return <><PageHead title="Notes" /><NotAvailable what="The notes history" /></>
   if (state === 'error') return <><PageHead title="Notes" /><Failed what="notes" retry={reload} /></>
-  const notes = (data?.notes ?? []).filter(n => sameAcct(account, n.account) && (f === 'all' || n.status === f))
+  const mine = (data?.notes ?? []).filter(n => sameAcct(account, n.account))
+  const notes = mine.filter(n => f === 'all' || n.status === f)
+  const by = (s: NoteStatus) => mine.filter(n => n.status === s).length
   return (
     <>
-      <PageHead title="Notes" sub="Every note written back to the CRM, with its status.">
+      <PageHead title="Notes" sub={<><Stat n={by('saved')} label="saved" /><Stat n={by('queued')} label="queued" tone="amber" /><Stat n={by('failed')} label="failed" tone="red" /></>}>
         <select aria-label="Status" value={f} onChange={e => setF(e.target.value as typeof f)}>
           <option value="all">All statuses</option><option value="queued">Queued</option><option value="saved">Saved</option><option value="failed">Failed</option>
         </select>
@@ -140,6 +137,7 @@ export function NotesPage() {
 }
 
 // ---------- Deals ----------
+const KindTag = ({ k }: { k: Deal['kind'] }) => (k === 'deal' ? null : <span className="kind-tag">{k === 'offer' ? 'Offer' : 'Told only'}</span>)
 type SortKey = 'title' | 'acct' | 'band' | 'stage' | 'value' | 'term_ends' | 'risk'
 const RISK_ORD = { red: 3, amber: 2, watch: 1 }
 const cmp = (k: SortKey, a: Deal, b: Deal): number => {
@@ -172,10 +170,11 @@ export function DealsPage() {
         {label}{sort.k === k && <Icon n={sort.dir === 1 ? 'up' : 'down'} size={14} />}</button>
     </th>
   )
+  const scoped = all.filter(d => sameAcct(account, d.acct))
   const cols = group === 'band' ? BANDS.map(b => ({ key: b.key as string, label: b.label })) : [...stages, '-'].map(s => ({ key: s, label: s === '-' ? 'No stage on file' : s }))
   return (
     <>
-      <PageHead title="Deals" sub={`${rows.length} of ${all.length} deals. Values stay in their own currency and are never added across bands.`}>
+      <PageHead title="Deals" info={<WorthInfo />} sub={`${countLabel(scoped.map(d => d.kind))}${rows.length < scoped.length ? ` · ${rows.length} shown` : ''}`}>
         <div className="seg" role="group" aria-label="View">
           <button type="button" aria-pressed={view === 'table'} onClick={() => setView('table')}><Icon n="list" size={16} />Table</button>
           <button type="button" aria-pressed={view === 'board'} onClick={() => setView('board')}><Icon n="board" size={16} />Board</button>
@@ -194,7 +193,7 @@ export function DealsPage() {
             <thead><tr>{th('title', 'Deal')}{th('acct', 'Account')}{th('band', 'Band')}{th('stage', 'Stage')}{th('value', 'Value')}{th('term_ends', 'Renewal date')}{th('risk', 'Risk')}<th scope="col">Receipts</th></tr></thead>
             <tbody>{rows.map(d => (
               <tr key={`${d.acct}${d.key}`}>
-                <td><a className="link strong" href={dealHref(d)}>{d.title}</a><div className="mono muted">{d.id ?? 'no id on file'}</div></td>
+                <td><a className="link strong" href={dealHref(d)}>{d.title}</a><KindTag k={d.kind} /><div className="mono muted">{d.id ?? 'no id on file'}</div></td>
                 <td>{acctLabel(names, d.acct)}</td>
                 <td><BandChip k={d.band} /></td>
                 <td>{d.stage ?? <span className="muted">not on file</span>}</td>
@@ -213,7 +212,7 @@ export function DealsPage() {
               <h2 className="lane-h">{c.label}<span className="count">{items.length}</span></h2>
               {items.map(d => (
                 <a key={`${d.acct}${d.key}`} className="card deal-card" href={dealHref(d)}>
-                  <strong>{d.title}</strong>
+                  <strong>{d.title}<KindTag k={d.kind} /></strong>
                   <span className="num">{dealValue(d) ?? 'no value'}</span>
                   <span className="muted small">{acctLabel(names, d.acct)}{d.term_ends ? ` · ends ${d.term_ends}` : ''}</span>
                   {d.risk && <Tag level={d.risk === 'watch' ? '' : d.risk}>{riskLabel(d.risk)}</Tag>}
@@ -237,6 +236,8 @@ export function DealPage({ acct, k }: { acct: string; k: string }) {
   if (!deal) return <>{back}<Empty title="Deal not found">No deal with id {k} on account {acct.toUpperCase()} in the current book.</Empty></>
   const a = book.accounts[acct]
   const power = a.q2?.deals?.find(p => p.deal === deal.id)
+  const pw = a.power?.deals.find(p => dealKey(p.deal) === deal.key)
+  const rd = a.radar?.deals.find(r => dealKey(r.deal) === deal.key)
   const gaps = (a.q5?.gaps ?? []).filter(g => g.deals.some(x => x.id === deal.id))
   const moves = allMoves(book, acct).filter(m => m.deal?.id === deal.id)
   const items = (activity.data?.items ?? []).filter(i => i.deal === deal.id)
@@ -255,8 +256,9 @@ export function DealPage({ acct, k }: { acct: string; k: string }) {
         </section>
         <section className="card" aria-label="Risks">
           <h2 className="label">What could go wrong</h2>
+          {rd && <div className="rag-row">{DIMS.map(dim => <div key={dim.k}><span className="label">{dim.label}</span><RagChip c={rd[dim.k]} dim={dim} /></div>)}</div>}
           {a.q4 && deal.risks.length > 0 && <RiskTimeline q4={a.q4} deal={deal.id} />}
-          {!deal.risks.length ? <p className="muted">Nothing flagged on file for this deal. That is not an all-clear.</p> : (
+          {!deal.risks.length ? <p className="muted">None flagged · not an all-clear</p> : (
             <ul className="stack tight">{deal.risks.map((r, i) => (
               <li key={i}><Tag level={r.level}>{r.level === 'red' ? 'Red' : r.level === 'amber' ? 'Amber' : 'Watch'}</Tag> {r.text}
                 <div className={`muted small${r.turns_bad_on && r.turns_bad_on !== NOT_ON_FILE ? ' bad' : ''}`}>{turns(r)}</div><Receipts rs={r.receipts} /></li>))}</ul>
@@ -264,22 +266,22 @@ export function DealPage({ acct, k }: { acct: string; k: string }) {
         </section>
         <section className="card wide" aria-label="Power">
           <h2 className="label">Who holds the power</h2>
-          {power ? <><PowerMap p={power} /><PowerGrid p={power} /></> : <p className="muted">Decides, pays, uses, could block: not on file for this deal.</p>}
+          {pw ? <PowerView acct={acct} pd={pw} all={a.power!.deals} /> : power ? <PowerGrid p={power} /> : <p className="muted">not on file</p>}
         </section>
         <section className="card" aria-label="Unknowns">
           <h2 className="label">Not known</h2>
-          {gaps.length ? gaps.map((g, i) => <GapRow key={i} g={g} />) : <p className="muted">No gaps recorded against this deal.</p>}
+          {gaps.length ? gaps.map((g, i) => <GapRow key={i} g={g} />) : <p className="muted">None recorded</p>}
         </section>
         <section className="card" aria-label="Moves">
           <h2 className="label">Moves</h2>
           {moves.length ? <ul className="stack tight">{moves.map(m => <li key={m.rank}><b>{m.rank}.</b> {m.action}<div className="muted small">{m.owner} · due {m.due}</div></li>)}</ul>
-            : <p className="muted">No ranked move touches this deal.</p>}
+            : <p className="muted">None</p>}
           {moves.length > 0 && <a className="link" href="#/moves">Review in Moves</a>}
         </section>
         <section className="card wide" aria-label="Activity">
           <h2 className="label">Activity</h2>
           {activity.state === 'na' ? <p className="muted">The activity feed is not available yet.</p> : activity.state === 'loading' ? <Loading rows={2} />
-            : items.length ? <Timeline items={items} /> : <p className="muted">No activity linked to this deal.</p>}
+            : items.length ? <Timeline items={items} /> : <p className="muted">None linked</p>}
         </section>
         <section className="card wide" aria-label="Notes">
           <h2 className="label">Notes</h2>
@@ -310,7 +312,7 @@ export function ActivityPage() {
   const { account } = useData()
   const { data, state, reload } = useApi<{ as_of: string; items: ActivityItem[] }>('/api/activity')
   const [kinds, setKinds] = useState<Set<string>>(new Set()); const [deal, setDeal] = useState(''); const [q, setQ] = useState('')
-  const head = <PageHead title="Activity" sub={data?.as_of ? `Emails, calls, requests, tickets, signals and invoices. As of ${when(data.as_of)}.` : 'Emails, calls, requests, tickets, signals and invoices.'} />
+  const head = <PageHead title="Activity" sub={data ? `${data.items.length} items${data.as_of ? ` · as of ${when(data.as_of)}` : ''}` : undefined} />
   if (state === 'loading') return <>{head}<Loading /></>
   if (state === 'na') return <>{head}<NotAvailable what="The activity feed" /></>
   if (state === 'error') return <>{head}<Failed what="activity" retry={reload} /></>
@@ -353,17 +355,18 @@ export function PeoplePage() {
         }
     return [...m.values()]
   }, [book, names])
-  const head = <PageHead title="People" sub="Stakeholders on both sides, where each stands with you, and the deals they hold a role on." />
-  if (ppl.state === 'loading') return <>{head}<Loading /></>
-  if (ppl.state === 'error') return <>{head}<Failed what="people" retry={ppl.reload} /></>
+  if (ppl.state === 'loading') return <><PageHead title="People" /><Loading /></>
+  if (ppl.state === 'error') return <><PageHead title="People" /><Failed what="people" retry={ppl.reload} /></>
   const list: P[] = ppl.state === 'na' ? derived : ppl.data?.people ?? []
   const rows = list.filter(p => sameAcct(account, p.account) && (!side || p.side === side) && (!q || `${p.name} ${p.title ?? ''} ${p.org ?? ''}`.toLowerCase().includes(q.toLowerCase())))
+  const n = (s: string) => rows.filter(p => p.side === s).length
+  const head = <PageHead title="People" sub={<><Stat n={n('customer')} label="customer" /><Stat n={n('flytbase')} label="FlytBase" /></>} />
   const last = (p: P) => (act.data?.items ?? []).filter(i => (i.kind === 'email' || i.kind === 'call') && i.receipts.some(r => p.receipts.some(x => x.id === r.id)))
     .sort((a, b) => (b.dated ?? '').localeCompare(a.dated ?? ''))[0]
   return (
     <>
       {head}
-      {ppl.state === 'na' && <p className="notice">The full directory is not available yet. Showing the people named in the power map.</p>}
+      {ppl.state === 'na' && <p className="notice">Full directory is not available yet · showing names from the power data</p>}
       <div className="filters">
         <input type="search" aria-label="Search people" placeholder="Search people" value={q} onChange={e => setQ(e.target.value)} />
         <select aria-label="Side" value={side} onChange={e => setSide(e.target.value)}><option value="">Both sides</option><option value="customer">Customer</option><option value="flytbase">FlytBase</option></select>
@@ -414,7 +417,7 @@ export function SyncPage({ health, progress, resync, resyncing, resyncError }: {
   const state = unreachable ? 'App unreachable' : health.stale ? 'MCP unreachable' : 'Live'
   return (
     <>
-      <PageHead title="Sync" sub="How fresh the data is, per tool. The app polls the CRM one call a minute.">
+      <PageHead title="Sync" sub="1 MCP call a minute">
         <button type="button" className="btn primary" onClick={resync} disabled={resyncing}>{resyncing ? 'Resyncing…' : 'Resync now'}</button>
       </PageHead>
       {resyncError && <p className="err" role="alert">{resyncError}</p>}

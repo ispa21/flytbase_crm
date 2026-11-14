@@ -1,13 +1,13 @@
 /* Book Tool CRM. Design language ported from CallAnalytics ("Signal"): warm neutral surface ramp, three-tier status colour,
-   hairline instrument panels, mono for anything the machine measured. ONE accent (cobalt) for what you can act on. */
+   hairline instrument panels, mono for anything the machine measured. ONE accent (vermilion) for what you can act on. */
 :root {
   color-scheme: light;
   --paper: oklch(96.45% 0.0025 106); --card: oklch(100% 0 0); --elevated: oklch(98.05% 0.0017 106); --sunken: oklch(94.25% 0.0029 106);
   --line: oklch(92.02% 0.0033 106); --line-strong: oklch(86.3% 0.0038 106);
   --ink: oklch(20.49% 0 0); --ink-2: oklch(51% 0.0026 106); --muted: oklch(51% 0.0026 106);
   --hover: oklch(94.25% 0.0029 106); --press: oklch(89.5% 0.0035 106);
-  --accent: oklch(50% 0.2 264); --on-accent: #FFFFFF; --focus: oklch(50% 0.2 264); --accent-tint: oklch(95.4% 0.022 262);
-  --contract: oklch(44.79% 0.1083 151.3); --backed: var(--accent); --unbacked: oklch(53.53% 0.1255 57.3); --unpriced: oklch(51% 0.0026 106);
+  --accent: oklch(54% 0.19 38); --on-accent: #FFFFFF; --focus: oklch(54% 0.19 38); --accent-tint: oklch(95.5% 0.03 50);
+  --contract: oklch(44.79% 0.1083 151.3); --backed: oklch(48% 0.09 235); --unbacked: oklch(53.53% 0.1255 57.3); --unpriced: oklch(51% 0.0026 106);
   --red: oklch(52.02% 0.2007 27.6); --amber: oklch(53.53% 0.1255 57.3); --wash: oklch(96.3% 0.025 78); --stale: oklch(53.53% 0.1255 57.3);
   --red-tint: oklch(95.6% 0.021 22); --green-tint: oklch(96.2% 0.023 152);
   --panel: oklch(20.49% 0 0); --on-panel: oklch(96.45% 0.0025 106); --on-panel-muted: oklch(72% 0.004 106); --panel-line: oklch(30% 0 0); --panel-hover: oklch(26% 0 0);
@@ -25,8 +25,8 @@
   --line: oklch(29% 0.004 106); --line-strong: oklch(36.5% 0.005 106);
   --ink: oklch(92% 0.006 106.5); --ink-2: oklch(70.9% 0.002 106); --muted: oklch(70.9% 0.002 106);
   --hover: oklch(22.5% 0.003 106); --press: oklch(27% 0.004 106);
-  --accent: oklch(74% 0.14 262); --on-accent: oklch(15% 0.003 106); --focus: oklch(74% 0.14 262); --accent-tint: oklch(26% 0.054 256);
-  --contract: oklch(80.03% 0.1821 151.7); --unbacked: oklch(83.69% 0.1644 84.4); --unpriced: oklch(70.9% 0.002 106);
+  --accent: oklch(72% 0.17 45); --on-accent: oklch(15% 0.003 106); --focus: oklch(72% 0.17 45); --accent-tint: oklch(27% 0.05 45);
+  --contract: oklch(80.03% 0.1821 151.7); --backed: oklch(74% 0.09 235); --unbacked: oklch(83.69% 0.1644 84.4); --unpriced: oklch(70.9% 0.002 106);
   --red: oklch(71.06% 0.1661 22.2); --amber: oklch(83.69% 0.1644 84.4); --wash: oklch(27% 0.05 72); --stale: oklch(83.69% 0.1644 84.4);
   --red-tint: oklch(26% 0.056 20); --green-tint: oklch(26% 0.048 152);
   --panel: oklch(22.5% 0.003 106); --on-panel: oklch(92% 0.006 106.5); --on-panel-muted: oklch(70.9% 0.002 106); --panel-line: oklch(31% 0.004 106); --panel-hover: oklch(27% 0.004 106);
@@ -409,3 +409,37 @@ nav.tabs a[aria-current='page'] { border-bottom-color: var(--accent); }
   .tabs a { min-height: 38px; }
   .disc-h, .gap-head { min-height: 56px; }
 }
+
+/* ===== numbers over sentences: stats, info tooltips, account filter ===== */
+.ph-t { display: flex; align-items: center; gap: 6px; }
+.ph-sub { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.info-btn { position: relative; display: inline-grid; place-items: center; flex: none; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--r-full); background: transparent; color: var(--muted); }
+.info-btn::after { content: ''; position: absolute; inset: -8px; }
+@media (hover: hover) and (pointer: fine) { .info-btn:hover { background: var(--hover); color: var(--ink); } }
+.info-pop { display: flex; flex-direction: column; gap: 10px; max-width: min(360px, 90vw); font: 400 13px/1.5 var(--sans); color: var(--ink); }
+.info-dl { display: grid; gap: 6px; }
+.info-dl div { display: grid; grid-template-columns: 124px minmax(0, 1fr); gap: 8px; }
+.info-dl dd { color: var(--ink-2); }
+.stat { display: inline-flex; align-items: baseline; gap: 5px; font-size: 13px; color: var(--ink-2); white-space: nowrap; }
+.stat b { font: 600 16px/1 var(--sans); color: var(--ink); }
+.stat.red b { color: var(--red); } .stat.amber b { color: var(--amber); }
+.stat.zero b { color: var(--muted); font-weight: 500; }
+.stats-row { display: flex; flex-wrap: wrap; gap: 6px 18px; padding-top: 12px; border-top: 1px solid var(--line); }
+.sec-h { display: flex; align-items: center; gap: 14px; }
+.sec-h h3 { margin-right: auto; }
+.viewing { font-size: 12.5px; color: var(--ink-2); white-space: nowrap; }
+.viewing b { color: var(--ink); font-weight: 600; }
+select.acct { max-width: 240px; }
+.brand { color: var(--ink-2); }
+.kind-tag { display: inline-block; margin-left: 8px; padding: 3px 6px; border-radius: var(--r-sm); background: var(--sunken); color: var(--ink-2); font: 500 10.5px/1 var(--mono); letter-spacing: .04em; white-space: nowrap; vertical-align: 2px; }
+.acct-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); }
+.acct-card { gap: 14px; }
+.acct-card .acct-link { font-size: 18px; }
+.next { padding-top: 10px; border-top: 1px solid var(--line); }
+.why { text-wrap: pretty; }
+@media (max-width: 860px) {
+  .bar .seg.acct { order: 7; flex: 1 1 100%; margin-right: 0; }
+  .bar .seg.acct button { flex: 1 1 auto; }
+  .viewing { order: 8; }
+}
+.nowrap { white-space: nowrap; }

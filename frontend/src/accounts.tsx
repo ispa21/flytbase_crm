@@ -2,9 +2,10 @@ import { useMemo, useState } from 'react'
 import { postNote, useApi, useData, type Account, type ActivityItem, type BandKey, type Note, type Person } from './api'
 import { GapRow, Risk } from './home'
 import { toast } from './live'
-import { StandMeter } from './viz'
-import { StatusPill, Timeline, dealHref } from './pages'
-import { Avatar, BandChip, BANDS, Empty, Failed, Loading, NotAvailable, NOT_ON_FILE, PageHead, Receipts, dealValue, dealsOf, money, riskLabel, when } from './ui'
+import { StandMeter, WorthBars } from './viz'
+import { RiskTiles } from './radar'
+import { StatusPill, Timeline } from './pages'
+import { Avatar, BandChip, Empty, Failed, Loading, NotAvailable, NOT_ON_FILE, PageHead, Receipts, Stat, WorthInfo, countLabel, dealHref, dealValue, dealsOf, dueIn, riskLabel, when } from './ui'
 import './accounts.css'
 
 const TABS = [
@@ -16,15 +17,10 @@ const TABS = [
 ] as const
 type Tab = (typeof TABS)[number]['id']
 
-/** "£310,000 · €20,000" for a band; null when the band has nothing priced. Never summed across currencies or bands. */
-const bandTotal = (a: Account, k: Exclude<BandKey, 'unpriced'>) => {
-  const e = Object.entries(a.q1?.totals[k]?.by_currency ?? {})
-  return e.length ? e.map(([c, n]) => money(n, c) + (c === 'unknown' ? ' (currency not on file)' : '')).join(' · ') : null
-}
-const redCount = (a: Account) => (a.q4?.items ?? []).filter(i => i.level === 'red').length
-const nextMove = (a: Account) => a.q3?.moves?.[0]
+const level = (a: Account, l: 'red' | 'amber') => (a.q4 ? a.q4.items.filter(i => i.level === l).length : null)
+const today = (a: Account) => a.q4?.today ?? new Date().toISOString().slice(0, 10)
 
-// ---------- list ----------
+// ---------- list: one small dashboard per account ----------
 function AccountsList() {
   const { book, names } = useData()
   const rows = Object.entries(book?.accounts ?? {})
@@ -32,41 +28,28 @@ function AccountsList() {
   if (!rows.length) return <><PageHead title="Accounts" /><Empty title="No accounts yet">They appear here once the first sync lands.</Empty></>
   return (
     <>
-      <PageHead title="Accounts" sub="Every account in the book, with what it is worth, what is slipping and what to do first. Bands are never added together." />
-      <div className="table-wrap">
-        <table className="grid">
-          <thead><tr>
-            <th scope="col">Account</th><th scope="col">Deals</th><th scope="col">On contract</th><th scope="col">Backed upside</th>
-            <th scope="col">Unbacked</th><th scope="col">Going wrong</th><th scope="col">Do first</th><th scope="col">Not known</th>
-          </tr></thead>
-          <tbody>{rows.map(([id, a]) => {
-            const n = dealsOf(book).filter(d => d.acct === id).length
-            const m = nextMove(a)
-            const red = redCount(a)
-            const items = a.q4?.items.length ?? 0
-            return (
-              <tr key={id}>
-                <td><div className="acct-name"><span className="acct-mark" aria-hidden="true">{id}</span>
-                  <a className="acct-link" href={`#/accounts/${id}`}>{names[id] ?? id}</a></div></td>
-                <td className="num">{n}</td>
-                <td>{bandTotal(a, 'on_contract') ?? <span className="muted">none</span>}</td>
-                <td>{bandTotal(a, 'backed_upside') ?? <span className="muted">none</span>}</td>
-                <td>{bandTotal(a, 'unbacked') ?? <span className="muted">none</span>}</td>
-                <td>{items ? <>{red > 0 && <span className="rtag red">{red} red</span>} <span className="muted">{items} {items === 1 ? 'item' : 'items'}</span></> : <span className="muted">none flagged</span>}</td>
-                <td>{m ? <>{m.action}<span className="muted small block">{m.owner} · due {m.due}</span></> : <span className="muted">not available yet</span>}</td>
-                <td className="num">{a.q5?.gaps.length ?? 0}</td>
-              </tr>)
-          })}</tbody>
-        </table>
-      </div>
+      <PageHead title="Accounts" info={<WorthInfo />} />
+      <div className="acct-grid">{rows.map(([id, a]) => {
+        const m = a.q3?.moves?.[0]
+        const due = a.q3 ? dueIn(a.q3.moves, today(a)).week : null
+        return (
+          <section key={id} className="card acct-card" aria-label={names[id] ?? id}>
+            <div><a className="acct-link" href={`#/accounts/${id}`}>{names[id] ?? id}</a>
+              <span className="muted small block">{countLabel(dealsOf(book).filter(d => d.acct === id).map(d => d.kind))}</span></div>
+            <WorthBars a={a} />
+            <div className="stats-row">
+              <Stat n={level(a, 'red')} label="red" tone="red" /><Stat n={level(a, 'amber')} label="amber" tone="amber" />
+              <Stat n={due} label="due this week" /><Stat n={a.q5 ? a.q5.gaps.length : null} label="not known" />
+            </div>
+            {m && <p className="small next"><span className="label">Next</span> <b>{m.action}</b> <span className="muted">· {m.owner} · {m.due}</span></p>}
+          </section>)
+      })}</div>
     </>
   )
 }
 
 // ---------- tabs ----------
 function Overview({ id, a }: { id: string; a: Account }) {
-  const { book } = useData()
-  const deals = dealsOf(book).filter(d => d.acct === id)
   const risks = a.q4?.items ?? []
   const moves = (a.q3?.moves ?? []).slice(0, 3)
   const gaps = a.q5?.gaps ?? []
@@ -75,15 +58,7 @@ function Overview({ id, a }: { id: string; a: Account }) {
       <div className="stack">
         <section className="card">
           <h2>Worth</h2>
-          <dl className="kv">
-            {BANDS.map(b => (
-              <div key={b.key} style={{ display: 'contents' }}>
-                <dt><BandChip k={b.key} /></dt>
-                <dd>{b.key === 'unpriced' ? `${a.q1?.bands.unpriced.length ?? 0} deals, no value` : bandTotal(a, b.key) ?? 'none'}</dd>
-              </div>
-            ))}
-          </dl>
-          <p className="muted small">{deals.length} {deals.length === 1 ? 'deal' : 'deals'}. Unbacked and Unpriced are held apart and never added to a total.</p>
+          <WorthBars a={a} />
         </section>
         <section className="card">
           <h2>Do first</h2>
@@ -102,6 +77,7 @@ function Overview({ id, a }: { id: string; a: Account }) {
       <div className="stack">
         <section className="card">
           <h2>Going wrong</h2>
+          {a.radar && <RiskTiles radar={a.radar} compact />}
           {risks.length ? <ol className="risk-list">{risks.slice(0, 4).map((r, i) => <Risk key={i} r={r} />)}</ol> : <p className="muted">Nothing flagged.{a.q4?.gaps.length ? ` Not checked: ${a.q4.gaps.join('; ')}.` : ''}</p>}
         </section>
         <section className="card">
@@ -213,15 +189,15 @@ function AccountPage({ id, tab }: { id: string; tab: Tab }) {
   if (!book) return <Loading />
   const a = book.accounts[id]
   if (!a) return <><PageHead title="Account not found" /><Empty title={`No account "${id}"`}><a className="link" href="#/accounts">Back to Accounts</a></Empty></>
-  const n = dealsOf(book).filter(d => d.acct === id).length
-  const red = redCount(a)
+  const ds = dealsOf(book).filter(d => d.acct === id)
+  const n = ds.length
+  const red = level(a, 'red')
   return (
     <>
       <p className="acct-crumb"><a href="#/accounts">Accounts</a> / {names[id] ?? id}</p>
       <div className="acct-head">
-        <span className="acct-mark" aria-hidden="true">{id}</span>
         <div><h1>{names[id] ?? id}</h1>
-          <p className="muted small">{n} {n === 1 ? 'deal' : 'deals'}{red ? ` · ${red} red` : ''}{asOf ? ` · as of ${when(asOf)}` : ''}</p></div>
+          <p className="muted small">{countLabel(ds.map(d => d.kind))}{red ? ` · ${red} red` : ''}{asOf ? ` · as of ${when(asOf)}` : ''}</p></div>
       </div>
       <nav className="tabs" aria-label="Account sections">
         {TABS.map(t => <a key={t.id} href={`#/accounts/${id}${t.id === 'overview' ? '' : `/${t.id}`}`} aria-current={tab === t.id ? 'page' : undefined}>

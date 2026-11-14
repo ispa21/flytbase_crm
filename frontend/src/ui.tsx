@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { Popover } from '@base-ui/react/popover'
-import type { Account, BandKey, Book, Line, Move, Receipt, RiskItem } from './api'
+import type { Account, BandKey, Book, Level, Line, Move, Receipt, RiskItem } from './api'
 
 // ---- formatting ----
 const SYM: Record<string, string> = { GBP: '£', EUR: '€', USD: '$', INR: '₹' }
@@ -44,6 +44,9 @@ const P: Record<string, string> = {
   board: 'M4 4h5v16H4zM10 4h5v10h-5zM16 4h4v13h-4z',
   up: 'M7 14l5-5 5 5',
   down: 'M7 10l5 5 5-5',
+  info: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18M12 11v5M12 8h.01',
+  radar: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8M12 12l6-6',
+  power: 'M12 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6M5 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6M19 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6M10.5 8.6l-4 7M13.5 8.6l4 7',
 }
 export const Icon = ({ n, size = 18 }: { n: string; size?: number }) => (
   <svg className="ico" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={P[n]} /></svg>
@@ -71,15 +74,55 @@ export const uniq = (rs: Receipt[]) => [...new Map(rs.map(r => [`${r.kind}:${r.i
 export const Receipts = ({ rs }: { rs: Receipt[] }) =>
   rs.length ? <span className="receipts">{uniq(rs).map(r => <Chip key={`${r.kind}:${r.id}`} r={r} />)}</span>
     : <span className="muted">no receipt</span>
+/** A figure whose receipts open on click: keeps dashboards light without losing a single record id. */
+export const ReceiptsPop = ({ label, rs }: { label: string; rs: Receipt[] }) => (
+  <Popover.Root>
+    <Popover.Trigger className="fig" aria-label={`${label}, ${uniq(rs).length} receipts`}>{label}</Popover.Trigger>
+    <Popover.Portal><Popover.Positioner sideOffset={6} align="end">
+      <Popover.Popup className="popup"><span className="k">Receipts</span><Receipts rs={rs} /></Popover.Popup>
+    </Popover.Positioner></Popover.Portal>
+  </Popover.Root>
+)
 
 // ---- small shared bits ----
+/** The caveat lives here, one click away, instead of a sentence on every page. */
+export const Info = ({ children, label = 'How to read this' }: { children: ReactNode; label?: string }) => (
+  <Popover.Root>
+    <Popover.Trigger className="info-btn" aria-label={label}><Icon n="info" size={16} /></Popover.Trigger>
+    <Popover.Portal><Popover.Positioner sideOffset={6}><Popover.Popup className="popup info-pop">{children}</Popover.Popup></Popover.Positioner></Popover.Portal>
+  </Popover.Root>
+)
+const BAND_HINT: Record<BandKey, string> = {
+  on_contract: 'signed, backed by the contract file', backed_upside: 'open, a file or verified fact backs it',
+  unbacked: 'rests on a claim only', unpriced: 'no value on file',
+}
+export const WorthInfo = () => (
+  <>
+    <dl className="info-dl">{BANDS.map(b => <div key={b.key}><dt><BandChip k={b.key} /></dt><dd>{BAND_HINT[b.key]}</dd></div>)}</dl>
+    <p>Values stay in their own currency and are never added across bands.</p>
+  </>
+)
 export const BandChip = ({ k }: { k: BandKey }) => <span className={`bchip band-${k}`}><span className="mark" aria-hidden="true" />{bandName(k)}</span>
 export const Tag = ({ level, children }: { level?: string | null; children: ReactNode }) => <span className={`rtag ${level ?? ''}`}>{children}</span>
-export const PageHead = ({ title, sub, children }: { title: string; sub?: ReactNode; children?: ReactNode }) => (
-  <div className="page-head"><div><h1>{title}</h1>{sub && <p className="muted">{sub}</p>}</div>{children && <div className="page-actions">{children}</div>}</div>
+export const PageHead = ({ title, sub, info, children }: { title: string; sub?: ReactNode; info?: ReactNode; children?: ReactNode }) => (
+  <div className="page-head"><div><div className="ph-t"><h1>{title}</h1>{info && <Info>{info}</Info>}</div>{sub && <p className="muted ph-sub">{sub}</p>}</div>{children && <div className="page-actions">{children}</div>}</div>
+)
+/** One number with its word: "3 due this week". null = the feed is not there yet. */
+export const Stat = ({ n, label, tone }: { n: number | null; label: string; tone?: string }) => (
+  <span className={`stat${tone && n ? ` ${tone}` : ''}${n === 0 ? ' zero' : ''}`}><b>{n ?? '–'}</b> {label}{n == null && <span className="sr-only"> not available yet</span>}</span>
 )
 export const Empty = ({ title, children }: { title: string; children?: ReactNode }) => <div className="empty-state"><strong>{title}</strong>{children && <p className="muted">{children}</p>}</div>
-export const NotAvailable = ({ what }: { what: string }) => <Empty title={`${what} is not available yet`}>The backend has not published this feed. It appears here by itself once it does.</Empty>
+export const NotAvailable = ({ what }: { what: string }) => <Empty title={`${what} is not available yet`}>Appears here by itself once the backend publishes it.</Empty>
+
+// ---- RAG levels: colour always travels with a shape and a word ----
+export const LEVEL: Record<Level, string> = { red: 'Red', amber: 'Amber', green: 'Green', unknown: 'Not on file' }
+/** SVG mark for a level, centred on (x, y): red disc, amber diamond, green ring, grey dashed ring. */
+export const Mark = ({ level, x = 0, y = 0 }: { level: Level; x?: number; y?: number }) =>
+  level === 'red' ? <circle cx={x} cy={y} r={6} className="mk mk-red" />
+    : level === 'amber' ? <path d={`M${x} ${y - 7}L${x + 7} ${y}L${x} ${y + 7}L${x - 7} ${y}Z`} className="mk mk-amber" />
+      : level === 'green' ? <circle cx={x} cy={y} r={5} className="mk mk-green" />
+        : <circle cx={x} cy={y} r={5} className="mk mk-unknown" />
+export const Glyph = ({ level }: { level: Level }) => <svg className="glyph" width="12" height="12" viewBox="-8 -8 16 16" aria-hidden="true"><Mark level={level} /></svg>
 export const Loading = ({ rows = 5 }: { rows?: number }) => (
   <div aria-busy="true"><span className="sr-only" role="status">Loading…</span>
     {Array.from({ length: rows }, (_, i) => <div key={i} className="sk sk-row" aria-hidden="true" />)}</div>
@@ -90,12 +133,36 @@ export const Failed = ({ what, retry }: { what: string; retry?: () => void }) =>
 export const Avatar = ({ name }: { name: string }) => <span className="avatar" aria-hidden="true">{name.split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase()}</span>
 
 // ---- derived deals (the one list Home, Deals, search and palette read) ----
+/** deal = an opportunity; offer = an open offer; told = a told-only item (no id, or only claims behind it). */
+export type Kind = 'deal' | 'offer' | 'told'
+export const kindOf = (l: { id: string | null; receipts: Receipt[] }): Kind =>
+  l.receipts.some(r => r.kind === 'offer' && r.id === l.id) ? 'offer'
+    : l.id == null || (l.receipts.some(r => r.status === 'claim') && l.receipts.every(r => r.kind === 'fact')) ? 'told' : 'deal'
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
+/** "7 deals · 2 offers · 2 told only": zero kinds are left out. */
+export const countLabel = (kinds: Kind[]) => {
+  const n = (k: Kind) => kinds.filter(x => x === k).length
+  const parts = [n('deal') || !kinds.length ? plural(n('deal'), 'deal') : '', n('offer') ? plural(n('offer'), 'offer') : '', n('told') ? `${n('told')} told only` : '']
+  return parts.filter(Boolean).join(' · ')
+}
 export type Deal = {
   key: string; acct: string; id: string | null; title: string; band: BandKey; value: number | null; currency: string | null
   stage: string | null; term_ends: string | null; renewal_risk: boolean; blocker: unknown; note?: string; receipts: Receipt[]
-  risk: 'red' | 'amber' | 'watch' | null; risks: RiskItem[]
+  risk: 'red' | 'amber' | 'watch' | null; risks: RiskItem[]; kind: Kind
 }
 export const dealKey = (l: { id: string | null; title: string }) => l.id ?? `x:${l.title}`
+export const dealHref = (d: { acct: string; key: string }) => `#/deals/${d.acct}/${encodeURIComponent(d.key)}`
+/** First word if it is long enough to stand alone, else the first two: "Eastern Counties", "Aldermoor". */
+export const shortName = (name: string) => { const w = name.trim().split(/\s+/); return w[0].length >= 8 ? w[0] : w.slice(0, 2).join(' ') } // ponytail: length heuristic, swap for a backend short_name if one ships
+const DAY = 86_400_000
+/** The book's "today" (from q4), else the browser's. */
+export const todayOf = (book: Book | null) => Object.values(book?.accounts ?? {}).find(a => a.q4?.today)?.q4?.today ?? new Date().toISOString().slice(0, 10)
+/** Moves due in the next 7 days, and already late. Undated moves count in neither. */
+export const dueIn = (moves: Move[], today: string) => {
+  const t = Date.parse(today); let week = 0, late = 0
+  for (const m of moves) { const d = Date.parse(m.due); if (isNaN(d)) continue; if (d < t) late++; else if (d < t + 7 * DAY) week++ }
+  return { week, late }
+}
 const RANK = { red: 3, amber: 2, watch: 1 }
 export function dealsOf(book: Book | null): Deal[] {
   const out: Deal[] = []
@@ -110,7 +177,7 @@ export function dealsOf(book: Book | null): Deal[] {
         out.push({
           key: dealKey(l), acct: aid, id: l.id, title: l.title, band: band as BandKey, value: l.value, currency: l.currency,
           stage: l.stage ?? null, term_ends: l.term_ends ?? null, renewal_risk: !!l.renewal_risk, blocker: l.blocker ?? null,
-          note: l.note, receipts: l.receipts, risk: worst, risks,
+          note: l.note, receipts: l.receipts, risk: worst, risks, kind: kindOf(l),
         })
       }
   }
