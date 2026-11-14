@@ -348,9 +348,11 @@ textarea { width: 100%; padding: 10px 12px; line-height: 1.5; resize: vertical; 
   .side { display: none; }
   .menu-btn { display: inline-grid; }
   .bar { padding: 8px 12px; gap: 6px 8px; }
-  .search { flex-basis: 100%; order: 9; max-width: none; }
-  .search kbd { display: none; }
-  .chip { margin-left: 0; order: 8; flex: 1 1 100%; white-space: normal; }
+  .search { flex: 0 0 44px; width: 44px; padding: 0; justify-content: center; }
+  .search span, .search kbd { display: none; }
+  .bar .seg { margin-right: auto; }
+  .chip { order: 8; flex: 1 1 180px; min-width: 0; min-height: 0; margin-left: 0; padding: 0; border: 0; white-space: normal; }
+  .btn.resync { order: 9; min-height: 40px; }
   .banner { padding: 10px 16px; }
   #main { padding: 20px 16px 80px; }
   .detail { grid-template-columns: minmax(0, 1fr); }
