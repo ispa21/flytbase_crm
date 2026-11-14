@@ -25,6 +25,10 @@ CREATE TABLE IF NOT EXISTS caller(
   last_error_at DOUBLE PRECISION, last_error TEXT);
 CREATE TABLE IF NOT EXISTS changes(id INTEGER PRIMARY KEY, n BIGINT NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v DOUBLE PRECISION NOT NULL);
+CREATE TABLE IF NOT EXISTS notes(
+  id {pk}, account TEXT NOT NULL, deal TEXT, text TEXT NOT NULL, kind TEXT NOT NULL, source TEXT,
+  status TEXT NOT NULL, created_at DOUBLE PRECISION NOT NULL, saved_at DOUBLE PRECISION,
+  error TEXT, response TEXT);
 INSERT INTO caller(id) VALUES(1) ON CONFLICT DO NOTHING;
 INSERT INTO changes(id) VALUES(1) ON CONFLICT DO NOTHING;
 """
@@ -122,6 +126,28 @@ class DB:
 
     def queue_len(self):
         return self.x("SELECT COUNT(*) FROM queue").fetchone()[0]
+
+    # --- notes (write-back, story 6.3) -----------------------------------
+    def add_note(self, account, deal, text, kind, source, now) -> int:
+        return self.x("INSERT INTO notes(account,deal,text,kind,source,status,created_at) "
+                      "VALUES(?,?,?,?,?,'queued',?) RETURNING id", account, deal, text, kind, source, now).fetchone()[0]
+
+    def claim_note(self, nid):
+        """queued -> sending, atomically. None if already claimed/sent: a note is sent at most once."""
+        r = self.x("UPDATE notes SET status='sending' WHERE id=? AND status='queued' "
+                   "RETURNING account, deal, text, kind", nid).fetchone()
+        return dict(zip(("account", "deal", "text", "kind"), r)) if r else None
+
+    def finish_note(self, nid, ok, now, error, response):
+        self.x("UPDATE notes SET status=?, saved_at=?, error=?, response=? WHERE id=?",
+               "saved" if ok else "failed", now if ok else None, error, response, nid)
+        self.bump()
+
+    def notes(self):
+        rows = self.x("SELECT id, account, deal, kind, source, text, status, created_at, saved_at, error, response "
+                      "FROM notes ORDER BY id DESC").fetchall()
+        cols = ("id", "account", "deal", "kind", "source", "text", "status", "created_at", "saved_at", "error", "response")
+        return [dict(zip(cols, r)) for r in rows]
 
     # --- caller: lease, spacing, error ---------------------------------
     def acquire(self, now, ttl, min_idle=0.0) -> bool:

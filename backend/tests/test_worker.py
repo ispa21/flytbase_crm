@@ -39,7 +39,7 @@ def fixture(tool, args, check2=True):
 @pytest.fixture
 def db():
     d = DB(os.environ.get("TEST_DATABASE_URL", "sqlite::memory:"))
-    for t in ("snapshots", "signals", "queue", "caller", "changes", "meta"):
+    for t in ("snapshots", "signals", "queue", "caller", "changes", "meta", "notes"):
         if d.pg:
             d.x(f"DROP TABLE {t}")
     if d.pg:

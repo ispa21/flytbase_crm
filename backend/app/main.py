@@ -9,10 +9,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .book import build_book, what_changed
+from .crm import activity_view, load, people_view, public_note, validate_note
 from .db import DB
 from .health import health
 from .mcp import McpClient
-from .queue import RealClock
+from .queue import WRITE, RealClock
 from .sync import Sync
 from .worker import LEASE_TTL, run
 
@@ -111,6 +112,57 @@ def get_book(since: float | None = None):
         if since is not None and book["accounts"]:  # What Changed: ?since=<epoch seconds of last visit>
             book["changes"] = what_changed(db, since)
         return book
+    finally:
+        db.close()
+
+
+@app.post("/api/notes")
+async def post_note(body: dict, tasks: BackgroundTasks):
+    """The user's explicit approval of one note: store it queued, enqueue the write; the worker sends it (61 s spacing)."""
+    db = _db()
+    try:
+        snap = load(db)
+        if snap is None:
+            raise HTTPException(503, "accounts not loaded yet (waiting for first sync)")
+        note, why = validate_note(body, snap["ma"])
+        if why:
+            raise HTTPException(422, why)
+        now = clock.time()
+        nid = db.add_note(note["account"], note["deal"], note["text"], note["kind"], note["source"], now)
+        db.enqueue(WRITE, "write_note", {"note_id": nid})
+        db.bump()
+        started = bool(os.environ.get("AQ_TOKEN")) and db.acquire(now, LEASE_TTL, 0)
+    finally:
+        db.close()
+    if started:
+        tasks.add_task(_run, True)
+    return {"id": nid, "status": "queued", "started": started}
+
+
+@app.get("/api/notes")
+def get_notes():
+    db = _db()
+    try:
+        now = clock.time()
+        return {"notes": [public_note(n, now) for n in db.notes()]}
+    finally:
+        db.close()
+
+
+@app.get("/api/people")
+def get_people():
+    db = _db()
+    try:
+        return people_view(db)
+    finally:
+        db.close()
+
+
+@app.get("/api/activity")
+def get_activity():
+    db = _db()
+    try:
+        return activity_view(db)
     finally:
         db.close()
 

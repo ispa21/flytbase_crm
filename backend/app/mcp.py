@@ -58,7 +58,13 @@ class McpClient:
             r.raise_for_status()
             return _body_to_dict(r)
 
+    def _req(self, tool, args):
+        return {"jsonrpc": "2.0", "id": next(self._ids), "method": "tools/call",
+                "params": {"name": tool, "arguments": args or {}}}
+
     async def call(self, tool: str, args: dict | None = None) -> dict:
-        req = {"jsonrpc": "2.0", "id": next(self._ids), "method": "tools/call",
-               "params": {"name": tool, "arguments": args or {}}}
-        return unwrap(await self._send(req))
+        return unwrap(await self._send(self._req(tool, args)))
+
+    async def raw(self, tool: str, args: dict | None = None) -> dict:
+        """Whole JSON-RPC response, undecoded: for write_note, whose response shape is not recorded."""
+        return await self._send(self._req(tool, args))

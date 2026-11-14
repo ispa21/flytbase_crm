@@ -1,6 +1,8 @@
 """One worker run: take the Postgres lease, make spaced MCP calls until the time budget ends."""
+import json
 import logging
 
+from .crm import note_args, note_outcome
 from .queue import BACKOFF_CAP, MAX_ATTEMPTS, SPACING
 
 log = logging.getLogger("aq.worker")
@@ -15,6 +17,24 @@ def _fail(db, now, prio, tool, args, attempts, err):
         log.error("giving up on %s %s after %d attempts", tool, args, attempts + 1)
         return  # schedule() queues it again when due
     db.enqueue(prio, tool, args, attempts + 1, now + min(BACKOFF_CAP, SPACING * 2 ** attempts))
+
+
+async def _send_note(db, client, args, now):
+    """At most once: claim first; any failure is surfaced on the note, never requeued."""
+    n = db.claim_note(args.get("note_id"))
+    if n is None:
+        return
+    try:
+        resp = await client.raw("write_note", note_args(n))
+        ok, err = note_outcome(resp)
+    except Exception as e:
+        log.warning("write_note %s failed: %s", args, e)
+        resp, ok, err = None, False, f"{type(e).__name__}: {e}"[:300]
+    try:
+        raw = json.dumps(resp)
+    except (TypeError, ValueError):
+        raw = repr(resp)[:2000]
+    db.finish_note(args["note_id"], ok, now, err, raw)
 
 
 async def run(db, client, sync, clock, leased=False, min_idle=0.0):
@@ -40,6 +60,9 @@ async def run(db, client, sync, clock, leased=False, min_idle=0.0):
             now = clock.time()
             db.set_last_call(now)  # slot consumed even on error
             calls += 1
+            if tool == "write_note":
+                await _send_note(db, client, args, now)
+                continue
             try:
                 payload = await client.call(tool, args)  # unwrap guarantees a dict
             except Exception as e:
