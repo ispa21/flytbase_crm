@@ -1,18 +1,17 @@
 ---
-title: 'Live sync backend: MCP queue, snapshots, polling, health (stories 1.1-1.4)'
+
+## title: 'Live sync backend: MCP queue, snapshots, polling, health (stories 1.1-1.4)'
 type: 'feature'
 created: '2026-11-14'
-status: 'superseded'
+status: 'draft'
 route: 'dispatch'
-baseline_commit: 'NO_VCS'
 review_loop_iteration: 0
 context:
   - '{project-root}/CLAUDE.md'
   - '{project-root}/_bmad-output/implementation-artifacts/epic-1-context.md'
   - '{project-root}/docs/data-contract.md'
----
 
-<frozen-after-approval reason="human-owned intent — do not modify unless human renegotiates">
+
 
 ## Intent
 
@@ -36,7 +35,7 @@ context:
 | Rate limit or any error | Call raises or isError | Slot consumed, retried later, health shows unreachable once last good poll is >5 min old | Loop never dies |
 | Restart | Store has snapshots | Serves stored snapshots with their fetch times, then refreshes | N/A |
 
-</frozen-after-approval>
+
 
 ## Code Map
 
@@ -48,14 +47,16 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [x] `backend/app/mcp.py` -- JSON-RPC `tools/call` client, unwrap `content[0].text`, raise on `error`/`isError` -- story 1.1
-- [x] `backend/app/queue.py` -- single asyncio queue, 61 s spacing, priority order (writes, signals, whoami, refetch) -- one caller
-- [x] `backend/app/store.py` -- SQLite `snapshots(tool, args, fetched_at, payload)`, append-only, latest-by-key reads -- story 1.2
-- [x] `backend/app/sync.py` -- cold start, 2 min signals, 10 min whoami, re-fetch triggers, signal de-dup by id -- stories 1.2-1.3
-- [x] `backend/app/health.py`, `backend/app/main.py` -- `/api/health`, lifespan starts the queue -- story 1.4
-- [x] `backend/tests/` -- pytest for each matrix row with a fake clock and fake transport
+
+- [ ] `backend/app/mcp.py` -- JSON-RPC `tools/call` client, unwrap `content[0].text`, raise on `error`/`isError` -- story 1.1
+- [ ] `backend/app/queue.py` -- single asyncio queue, 61 s spacing, priority order (writes, signals, whoami, refetch) -- one caller
+- [ ] `backend/app/store.py` -- SQLite `snapshots(tool, args, fetched_at, payload)`, append-only, latest-by-key reads -- story 1.2
+- [ ] `backend/app/sync.py` -- cold start, 2 min signals, 10 min whoami, re-fetch triggers, signal de-dup by id -- stories 1.2-1.3
+- [ ] `backend/app/health.py`, `backend/app/main.py` -- `/api/health`, lifespan starts the queue -- story 1.4
+- [ ] `backend/tests/` -- pytest for each matrix row with a fake clock and fake transport
 
 **Acceptance Criteria:**
+
 - Given a fake transport, when 5 calls are queued, then call starts are at least 61 s apart on the fake clock.
 - Given the check2 fixtures, when sync runs, then both signals are stored once and re-fetch calls are queued.
 - Given no good poll for 5 min, when `/api/health` is read, then `stale` is true and the last fetch times are shown.
@@ -74,5 +75,6 @@ Queue priority within one slot: approved write, then due signals poll, then due 
 ## Verification
 
 **Commands:**
+
 - `cd backend && uv run pytest -q` -- expected: all pass, no network access
 - `cd backend && uv run python -c "import app.main"` -- expected: imports without `AQ_TOKEN` set

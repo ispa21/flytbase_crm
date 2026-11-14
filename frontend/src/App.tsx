@@ -1,338 +1,146 @@
-import { useEffect, useState } from 'react'
-import { Collapsible } from '@base-ui/react/collapsible'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Dialog } from '@base-ui/react/dialog'
 import { Popover } from '@base-ui/react/popover'
-import { useBook, type Account, type Changes, type Gap, type Q5, type BandKey, type DealPower, type Entry, type Line, type Q4, type Receipt, type RiskItem, type RoleKey } from './api'
+import { DataCtx, useApi, useBook, useData, type ActivityItem, type Person } from './api'
+import { AccountsPage } from './accounts'
+import { Home } from './home'
+import { ActivityPage, DealPage, DealsPage, MovesPage, NotesPage, PeoplePage, SyncPage, dealHref } from './pages'
+import { Failed, Icon, bandName, dealsOf, when } from './ui'
 
-const SYM: Record<string, string> = { GBP: '£', EUR: '€', USD: '$', INR: '₹' }
-const NO_CUR = 'unknown'
-export const money = (n: number, cur: string) => (cur === NO_CUR ? '' : SYM[cur] ?? cur + ' ') + n.toLocaleString('en-GB')
-const when = (iso: string | null) =>
-  iso ? new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null
+export { money } from './ui'
 
-const BANDS: { key: BandKey; label: string; apart?: boolean }[] = [
-  { key: 'on_contract', label: 'On contract' },
-  { key: 'backed_upside', label: 'Backed upside' },
-  { key: 'unbacked', label: 'Unbacked', apart: true },
-  { key: 'unpriced', label: 'Unpriced', apart: true },
+const NAV = [
+  { path: 'home', label: 'Home', icon: 'home', key: 'h' },
+  { path: 'accounts', label: 'Accounts', icon: 'accounts', key: 'c' },
+  { path: 'deals', label: 'Deals', icon: 'deals', key: 'd' },
+  { path: 'people', label: 'People', icon: 'people', key: 'p' },
+  { path: 'activity', label: 'Activity', icon: 'activity', key: 'a' },
+  { path: 'moves', label: 'Moves', icon: 'moves', key: 'm' },
+  { path: 'notes', label: 'Notes', icon: 'notes', key: 'n' },
+  { path: 'sync', label: 'Sync', icon: 'sync', key: 's' },
 ]
+const go = (path: string) => { window.location.hash = `#/${path === 'home' ? '' : path}` }
 
-function Chip({ r }: { r: Receipt }) {
-  const long = r.id.length > 28
-  const text = long ? `${r.id.slice(0, 12)}…${r.id.slice(-12)}` : r.id
-  const copy = () => navigator.clipboard?.writeText(r.id).catch(() => {})
-  const btn = <button type="button" className="receipt" onClick={copy} title={`Copy ${r.id}`}>{text}</button>
-  if (!long) return btn
+function useHash() {
+  const [h, setH] = useState(window.location.hash)
+  useEffect(() => { const f = () => setH(window.location.hash); window.addEventListener('hashchange', f); return () => window.removeEventListener('hashchange', f) }, [])
+  const parts = h.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent)
+  return parts
+}
+
+function useTheme() {
+  const [t, setT] = useState<'light' | 'dark'>(() => {
+    try { const v = localStorage.getItem('book.theme'); if (v === 'light' || v === 'dark') return v } catch { /* no memory */ }
+    return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  })
+  useEffect(() => { document.documentElement.dataset.theme = t; try { localStorage.setItem('book.theme', t) } catch { /* private mode */ } }, [t])
+  return [t, () => setT(x => (x === 'light' ? 'dark' : 'light'))] as const
+}
+
+// ---------- command palette + global search ----------
+type Hit = { key: string; group: string; label: string; sub?: string; to: string }
+function Palette({ open, setOpen }: { open: boolean; setOpen: (o: boolean) => void }) {
+  const { book } = useData()
+  const ppl = useApi<{ people: Person[] }>(open ? '/api/people' : null)
+  const act = useApi<{ items: ActivityItem[] }>(open ? '/api/activity' : null)
+  const [q, setQ] = useState(''); const [i, setI] = useState(0)
+  useEffect(() => { if (open) { setQ(''); setI(0) } }, [open])
+  const hits = useMemo<Hit[]>(() => {
+    const s = q.trim().toLowerCase()
+    const pages: Hit[] = NAV.map(n => ({ key: `p${n.path}`, group: 'Go to', label: n.label, to: n.path }))
+    if (!s) return pages
+    const has = (...v: (string | null | undefined)[]) => v.join(' ').toLowerCase().includes(s)
+    return [
+      ...pages.filter(p => has(p.label)),
+      ...dealsOf(book).filter(d => has(d.title, d.id)).slice(0, 6).map(d => ({ key: `d${d.acct}${d.key}`, group: 'Deals', label: d.title, sub: `${d.acct.toUpperCase()} · ${bandName(d.band)}`, to: dealHref(d).slice(2) })),
+      ...(ppl.data?.people ?? []).filter(p => has(p.name, p.title, p.org)).slice(0, 5).map(p => ({ key: `u${p.id}`, group: 'People', label: p.name, sub: `${p.account.toUpperCase()} · ${p.title ?? p.org ?? ''}`, to: 'people' })),
+      ...(act.data?.items ?? []).filter(a => has(a.title, a.summary)).slice(0, 5).map(a => ({ key: `a${a.id}`, group: 'Activity', label: a.title, sub: `${a.kind} · ${a.account.toUpperCase()}`, to: 'activity' })),
+    ]
+  }, [q, book, ppl.data, act.data])
+  const pick = (h?: Hit) => { if (!h) return; setOpen(false); go(h.to) }
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setI(x => Math.min(x + 1, hits.length - 1)) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setI(x => Math.max(x - 1, 0)) }
+    else if (e.key === 'Enter') { e.preventDefault(); pick(hits[i]) }
+  }
+  return (
+    <Dialog.Root open={open} onOpenChange={setOpen}>
+      <Dialog.Portal>
+        <Dialog.Backdrop className="scrim" />
+        <Dialog.Popup className="palette">
+          <Dialog.Title className="sr-only">Search and commands</Dialog.Title>
+          <div className="palette-in"><Icon n="search" />
+            <input autoFocus role="combobox" aria-expanded="true" aria-controls="palette-list" aria-activedescendant={hits[i] ? `opt-${hits[i].key}` : undefined}
+              aria-label="Search deals, people, activity" placeholder="Search deals, people, activity, or jump to a page" value={q} onChange={e => { setQ(e.target.value); setI(0) }} onKeyDown={onKey} /></div>
+          <ul id="palette-list" role="listbox" className="palette-list">
+            {hits.map((h, n) => (
+              <li key={h.key} id={`opt-${h.key}`} role="option" aria-selected={n === i} className={n === i ? 'on' : ''} onMouseMove={() => setI(n)} onClick={() => pick(h)}>
+                <span className="grp">{h.group}</span><span className="grow">{h.label}</span>{h.sub && <span className="muted small">{h.sub}</span>}
+              </li>))}
+            {!hits.length && <li className="muted palette-none">Nothing matches "{q}".</li>}
+          </ul>
+        </Dialog.Popup>
+      </Dialog.Portal>
+    </Dialog.Root>
+  )
+}
+
+// ---------- bell ----------
+function Bell({ onSeen }: { onSeen: () => void }) {
+  const { book, names } = useData()
+  const c = book?.changes
+  const n = c ? c.moved.length + c.new_deals.length + c.new_signals.length : 0
   return (
     <Popover.Root>
-      <Popover.Trigger className="receipt" onClick={copy}>{text}</Popover.Trigger>
+      <Popover.Trigger className="icon-btn bell" aria-label={`What changed, ${n} ${n === 1 ? 'item' : 'items'}`}><Icon n="bell" />{n > 0 && <span className="badge" aria-hidden="true">{n}</span>}</Popover.Trigger>
       <Popover.Portal>
-        <Popover.Positioner sideOffset={6}>
-          <Popover.Popup className="popup"><span className="k">{r.kind}</span>{r.id}</Popover.Popup>
+        <Popover.Positioner sideOffset={8} align="end">
+          <Popover.Popup className="popup bell-pop">
+            {!c || !n ? <p className="muted">Nothing changed since you last looked.</p> : (
+              <ul className="stack tight">
+                {c.new_signals.slice(0, 4).map(s => <li key={s.id}><span className="rtag">New signal</span> {s.title ?? s.id}</li>)}
+                {c.moved.slice(0, 4).map(m => <li key={m.account + m.deal}><span className="rtag">Moved</span> {m.title} <span className="muted">· {names[m.account] ?? m.account}</span>{m.band && <span className="muted">, {bandName(m.band.from)} to {bandName(m.band.to)}</span>}</li>)}
+                {c.new_deals.slice(0, 4).map(d => <li key={d.account + d.deal}><span className="rtag">New deal</span> {d.title}</li>)}
+              </ul>)}
+            <div className="row"><a className="link" href="#/" onClick={() => document.dispatchEvent(new Event('pointerdown'))}>See all on Home</a>{n > 0 && <button type="button" className="btn ghost" onClick={onSeen}>Clear</button>}</div>
+          </Popover.Popup>
         </Popover.Positioner>
       </Popover.Portal>
     </Popover.Root>
   )
 }
 
-const Chev = () => <svg className="chev" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" /></svg>
-
-const uniq = (rs: Receipt[]) => [...new Map(rs.map(r => [`${r.kind}:${r.id}`, r])).values()]
-const Receipts = ({ rs }: { rs: Receipt[] }) =>
-  rs.length ? <span className="receipts">{uniq(rs).map(r => <Chip key={`${r.kind}:${r.id}`} r={r} />)}</span>
-    : <span className="muted">no receipt</span>
-
-function leadOf(a: Account) {
-  const l = a.q1?.bands.on_contract.find(x => x.renewal_risk && x.term_ends && x.value != null && x.currency)
-  return l && { label: l.title, text: `Renewal ends ${l.term_ends}: ${money(l.value!, l.currency!)} on contract.`, receipts: l.receipts }
-}
-
-const ROLES: [RoleKey, string][] = [['decides', 'Decides'], ['pays', 'Pays'], ['uses', 'Uses'], ['could_block', 'Could block']]
-const NOT_ON_FILE = 'not on file'
-
-function describe(e: Entry): string {
-  if (e.who) return e.title ? `${e.who}, ${e.title}` : e.who
-  if (e.unnamed_logins) return `${e.unnamed_logins} unnamed ${e.unnamed_logins === 1 ? 'login' : 'logins'}`
-  if (e.usage_by) return `Usage by ${e.usage_by}`
-  if (e.paid_invoices?.length) return `Invoices ${e.paid_invoices.join(', ')}`
-  return e.text ?? NOT_ON_FILE
-}
-
-function Person({ e }: { e: Entry }) {
-  return (
-    <div className="person">
-      <span><strong>{describe(e)}</strong>
-        {e.who && e.text && <span className="muted"> · {e.text}</span>}
-        {e.stands && <span className={e.stands === NOT_ON_FILE ? 'muted' : 'stands'}> · {e.stands === NOT_ON_FILE ? 'standing not on file' : e.stands}</span>}
-        {e.gap && <span className="muted"> · {e.gap}</span>}
-        {e.backing === 'claim only' && <span className="muted"> · claim only</span>}</span>
-      <Receipts rs={e.receipts} />
-    </div>
-  )
-}
-
-function Power({ p }: { p: DealPower }) {
-  const voices = p.voices.filter(v => v.who)
-  return (
-    <Collapsible.Root className="power">
-      <Collapsible.Trigger className="power-head">
-        <Chev />
-        <span>Who decides, pays, uses, could block</span>
-      </Collapsible.Trigger>
-      <Collapsible.Panel className="panel">
-       <div className="roles">
-        {ROLES.map(([k, label]) => {
-          const c = p.roles[k]
-          return (
-            <div className="role" key={k}>
-              <span className="label">{label}</span>
-              {c && c.entries.length ? c.entries.map((e, i) => <Person key={i} e={e} />)
-                : <span className="muted">{NOT_ON_FILE}{c?.gap && c.gap !== NOT_ON_FILE ? `: ${c.gap}` : ''}</span>}
-            </div>
-          )
-        })}
-        {voices.length > 0 && (
-          <div className="role wide">
-            <span className="label">Spoke on this deal</span>
-            {voices.map((v, i) => <Person key={i} e={v} />)}
-          </div>
-        )}
-       </div>
-      </Collapsible.Panel>
-    </Collapsible.Root>
-  )
-}
-
-const BAND_HINT: Record<BandKey, string> = {
-  on_contract: 'Signed and backed by the contract file',
-  backed_upside: 'Open deals a file or a verified fact backs',
-  unbacked: 'Rests on a claim only',
-  unpriced: 'No value on file',
-}
-
-function Band({ k, label, apart, acc, aid, changed }: { k: BandKey; label: string; apart?: boolean; acc: Account; aid: string; changed: Set<string> }) {
-  const q1 = acc.q1!
-  const lines = q1.bands[k]
-  const t = k === 'unpriced' ? null : q1.totals[k]
-  const cur = Object.entries(t?.by_currency ?? {})
-  const isNew = lines.some(l => changed.has(`${aid}/${k}/${l.id ?? l.title}`))
-  return (
-    <Collapsible.Root className={`disc band-${k}${apart ? ' apart' : ''}${isNew ? ' changed' : ''}`}>
-      <Collapsible.Trigger className="disc-h">
-        <Chev />
-        <span className="band-name"><span className="mark" aria-hidden="true" /><span>{label}</span>{isNew && <span className="tag">New</span>}</span>
-        <span className="amt">
-          {cur.length ? cur.map(([c, n]) => <span key={c} className="amt-line"><b>{money(n, c)}</b>{c === NO_CUR && <i>currency not on file</i>}</span>)
-            : <span className="none">{k === 'unpriced' ? 'no value yet' : 'none'}</span>}
-        </span>
-        <span className="band-sub">{lines.length} {lines.length === 1 ? 'deal' : 'deals'} · {BAND_HINT[k]}</span>
-      </Collapsible.Trigger>
-      <Collapsible.Panel className="panel">
-        <div className="panel-in">
-          {lines.length === 0 && <p className="muted">No deals in this band.</p>}
-          {lines.map(l => <DealRow key={l.id ?? l.title} l={l} k={k} power={acc.q2?.deals?.find(d => d.deal === l.id)} />)}
-          {k !== 'unpriced' && !!t?.receipts.length && <div className="deal"><span className="sub">All receipts</span><Receipts rs={t.receipts} /></div>}
-        </div>
-      </Collapsible.Panel>
-    </Collapsible.Root>
-  )
-}
-
-function DealRow({ l, k, power }: { l: Line; k: BandKey; power?: DealPower }) {
-  const val = l.value == null ? (k === 'unpriced' ? '' : 'no value')
-    : l.currency ? money(l.value, l.currency) : `${l.value.toLocaleString('en-GB')} (currency not on file)`
-  return (
-    <div className="deal">
-      <div className="deal-top"><strong>{l.title}</strong><span className="num">{val}</span></div>
-      {l.renewal_risk && <span className="risk">Renewal risk{l.term_ends ? `, term ends ${l.term_ends}` : ''}</span>}
-      {l.note && <div className="muted">{l.note}</div>}
-      <Receipts rs={l.receipts} />
-      {power && <Power p={power} />}
-    </div>
-  )
-}
-
-const KIND: Record<string, string> = { renewal: 'Renewal', cold: 'Going cold', stuck: 'Stuck', usage_drop: 'Usage', signal: 'Signal' }
-const turns = (r: RiskItem) => (r.turns_bad_on && r.turns_bad_on !== NOT_ON_FILE ? `Turns bad on ${r.turns_bad_on}` : 'Turn date not on file')
-
-function Risk({ r }: { r: RiskItem }) {
-  const bad = r.turns_bad_on && r.turns_bad_on !== NOT_ON_FILE
-  return (
-    <li className="slip">
-      <span className={`slip-k ${r.level ?? ''}`}>{r.level === 'red' ? 'Red' : r.level === 'amber' ? 'Amber' : KIND[r.kind] ?? r.kind}</span>
-      <div>
-        <p>{r.text}</p>
-        <div className={`slip-when${bad ? ' bad' : ''}`}>{turns(r)}</div>
-      </div>
-      <Receipts rs={r.receipts} />
-    </li>
-  )
-}
-
-function Risks({ q4 }: { q4: Q4 }) {
-  const items = q4.items ?? []
-  const gaps = q4.gaps ?? []
-  if (!items.length && !gaps.length) return null
-  return (
-    <Collapsible.Root className="disc risks">
-      <Collapsible.Trigger className="disc-h">
-        <Chev />
-        <span className="band-name"><span>Slipping</span></span>
-        <span className="amt"><span className="amt-line"><b>{items.length}</b><i>{items.length === 1 ? 'item' : 'items'}</i></span></span>
-        <span className="band-sub">Deadlines at risk, people going cold, deals stuck</span>
-      </Collapsible.Trigger>
-      <Collapsible.Panel className="panel">
-        <div className="panel-in">
-          {items.length > 0 && <ol className="risk-list">{items.map((r, i) => <Risk key={i} r={r} />)}</ol>}
-          {gaps.length > 0 && <ul className="risk-gaps">{gaps.map((g, i) => <li key={i}>Not checked: {g}</li>)}</ul>}
-        </div>
-      </Collapsible.Panel>
-    </Collapsible.Root>
-  )
-}
-
-/** Value at stake per currency, never summed across currencies. */
-const stake = (g: Gap) => {
-  const by: Record<string, number> = {}
-  for (const d of g.deals) if (d.value != null) by[d.currency] = (by[d.currency] ?? 0) + d.value
-  return Object.entries(by).map(([c, n]) => money(n, c)).join(' · ')
-}
-
-function GapRow({ g }: { g: Gap }) {
-  const s = stake(g)
-  return (
-    <Collapsible.Root className="gap">
-      <Collapsible.Trigger className="gap-head">
-        <Chev />
-        <span className="gap-text">{g.text}</span>
-        {s && <span className="num">{s}</span>}
-      </Collapsible.Trigger>
-      <Collapsible.Panel className="panel">
-        <div className="gap-in">
-          <div className="role">
-            <span className="label">Puts at risk</span>
-            {g.deals.length ? g.deals.map(d => (
-              <div key={d.id}><strong>{d.title}</strong> <span className="num">{d.value != null ? money(d.value, d.currency) : 'no value on file'}</span></div>
-            )) : <span className="muted">No single deal; account-wide</span>}
-            {g.unpriced_deals > 0 && g.deals.length > 0 && <span className="muted">{g.unpriced_deals} without a value, not counted</span>}
-          </div>
-          <div className="role">
-            <span className="label">Who could fill it</span>
-            <span className={g.who_could_fill === NOT_ON_FILE ? 'muted' : ''}>{g.who_could_fill === NOT_ON_FILE ? 'Not on file' : g.who_could_fill}</span>
-          </div>
-          <div className="role"><span className="label">Receipts</span><Receipts rs={g.receipts} /></div>
-        </div>
-      </Collapsible.Panel>
-    </Collapsible.Root>
-  )
-}
-
-function NotKnown({ q5 }: { q5: Q5 }) {
-  const gaps = [...(q5.gaps ?? [])].sort((a, b) => (b.value_at_stake ?? -1) - (a.value_at_stake ?? -1)) // highest value first; unpriced last (stable)
-  if (!gaps.length) return null
-  return (
-    <div className="not-known">
-      <h3 className="label strip-title">Not known yet</h3>
-      {gaps.map((g, i) => <GapRow key={i} g={g} />)}
-    </div>
-  )
-}
-
-const bandName = (k: string) => BANDS.find(b => b.key === k)?.label ?? k
-
-function WhatChanged({ c, names, onSeen }: { c: Changes; names: Record<string, string>; onSeen: () => void }) {
-  const acc = (id?: string | null) => (id && names[id]) || id || ''
-  const empty = !c.moved.length && !c.new_deals.length && !c.new_signals.length
-  return (
-    <section className="changes" aria-label="What changed">
-      <div className="changes-head">
-        <h2 className="label">What changed</h2>
-        <button type="button" className="resync" onClick={onSeen}>Mark as seen</button>
-      </div>
-      {empty ? <p className="muted">Nothing changed since you last looked.</p> : (
-        <ul className="changes-list">
-          {c.new_signals.map(s => (
-            <li key={`s${s.id}`}><span><span className="tag">New signal</span> {s.title ?? s.id}{s.account && <span className="muted"> · {acc(s.account)}</span>}</span><Receipts rs={s.receipts} /></li>
-          ))}
-          {c.moved.map(m => (
-            <li key={`m${m.account}${m.deal}`}><span><span className="tag">Moved</span> {m.title}<span className="muted"> · {acc(m.account)}</span>
-              {m.band && <span>, {bandName(m.band.from)} to {bandName(m.band.to)}</span>}
-              {m.value && <span>, value {m.value.from ?? 'none'} to {m.value.to ?? 'none'}</span>}
-              {m.stage && <span>, stage {m.stage.from ?? 'none'} to {m.stage.to ?? 'none'}</span>}</span><Receipts rs={m.receipts} /></li>
-          ))}
-          {c.new_deals.map(d => (
-            <li key={`n${d.account}${d.deal}`}><span><span className="tag">New deal</span> {d.title}<span className="muted"> · {acc(d.account)} · {bandName(d.band)}</span></span><Receipts rs={[{ id: d.deal, kind: 'deal' }]} /></li>
-          ))}
-        </ul>
-      )}
-    </section>
-  )
-}
-
-const Skeleton = () => (
-  <div className="columns" aria-busy="true">
-    <span className="sr-only" role="status">Loading…</span>
-    {[0, 1].map(i => (
-      <section key={i} className="column" aria-hidden="true">
-        <div className="sk sk-head" />
-        <div className="sk sk-lead" />
-        {[0, 1, 2, 3].map(j => <div key={j} className="sk sk-row" />)}
-      </section>
-    ))}
-  </div>
-)
-
-function Column({ aid, acc, changed }: { aid: string; acc: Account; changed: Set<string> }) {
-  const lead = leadOf(acc)
-  const urgent = acc.q4?.items?.[0]
-  const deals = acc.q1 ? Object.values(acc.q1.bands).reduce((n, ls) => n + ls.length, 0) : 0
-  const kick = urgent?.level === 'red' ? 'red' : urgent?.level === 'amber' ? 'amber' : ''
-  return (
-    <section className="column" aria-label={acc.name ?? aid}>
-      <div className="head">
-        <span className="letter" aria-hidden="true">{aid}</span>
-        <h2>{acc.name ?? aid}</h2>
-        {acc.q1 && <span className="muted">{deals} {deals === 1 ? 'deal' : 'deals'}</span>}
-      </div>
-      {(lead || urgent) ? (
-        <div className="lead">
-          {lead && <>
-            <span className="kicker">{lead.label}</span>
-            <p className="display">{lead.text}</p>
-            <Receipts rs={lead.receipts} />
-          </>}
-          {urgent && (
-            <div className={`urgent${lead ? ' after' : ''}`}>
-              <span className={`kicker ${kick}`}>{kick === 'red' ? 'Going red' : kick === 'amber' ? 'Amber' : 'Watch'}</span>
-              <p className="display">{urgent.text}</p>
-              <p className="when">{turns(urgent)}</p>
-              <Receipts rs={urgent.receipts} />
-            </div>
-          )}
-        </div>
-      ) : null}
-      {acc.q1 ? (
-        <div className="sec">
-          <div className="sec-h"><h3>Worth</h3></div>
-          {BANDS.map((b, i) => (
-            <div key={b.key} className="ledger-row">
-              {i === 2 && <div className="ledger-sub">Held apart: never added to a total</div>}
-              <Band k={b.key} label={b.label} apart={b.apart} acc={acc} aid={aid} changed={changed} />
-            </div>
-          ))}
-        </div>
-      ) : <p className="empty">No value data for this account yet. It will appear here as soon as the next sync brings it in.</p>}
-      {acc.q4 && <div className="sec"><div className="sec-h"><h3>Going wrong</h3></div><Risks q4={acc.q4} /></div>}
-      {acc.q5 && <NotKnown q5={acc.q5} />}
-    </section>
-  )
-}
-
 export default function App() {
   const { book, markSeen, health, unreachable, changed, clearChanged, resync, resyncing, resyncError } = useBook()
+  const parts = useHash()
+  const [theme, toggleTheme] = useTheme()
+  const [account, setAccount] = useState('all')
+  const [palette, setPalette] = useState(false)
+  const [nav, setNav] = useState(false)
   const [note, setNote] = useState('')
+  const gPending = useRef(0)
   useEffect(() => { setNote(changed.size ? `${changed.size} ${changed.size === 1 ? 'item' : 'items'} changed` : '') }, [changed])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPalette(o => !o); return }
+      const el = e.target as HTMLElement
+      if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable) return
+      if (e.key === 'g') { gPending.current = Date.now(); return }
+      if (Date.now() - gPending.current < 1200) {
+        const t = NAV.find(n => n.key === e.key)
+        gPending.current = 0
+        if (t) go(t.path)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+  useEffect(() => { setNav(false); document.getElementById('main')?.focus({ preventScroll: true }) }, [parts.join('/')])
+
   const asOf = when(book?.as_of ?? null)
   const accounts = Object.entries(book?.accounts ?? {})
+  const names = Object.fromEntries(accounts.map(([id, a]) => [id, a.name ?? id]))
+  const mcpDown = unreachable || !!health?.stale
   const banner = unreachable
     ? `Can't reach the app. Showing data${asOf ? ` as of ${asOf}` : ' (none yet)'}.`
     : health?.stale
@@ -340,25 +148,65 @@ export default function App() {
       : null
   const left = health?.resync_at ? health.pending_calls ?? 0 : 0
   const progress = left > 0 ? `Resyncing · ${left} ${left === 1 ? 'call' : 'calls'} left (about ${left} ${left === 1 ? 'minute' : 'minutes'}, 1 call a minute)` : null
+  const route = parts[0] ?? 'home'
+  const ctx = { book, health, unreachable, account, mcpDown, names, asOf: book?.as_of ?? null }
+
+  const links = (cls: string) => NAV.map(n => (
+    <a key={n.path} href={`#/${n.path === 'home' ? '' : n.path}`} className={`${cls}${route === n.path ? ' active' : ''}`} aria-current={route === n.path ? 'page' : undefined}>
+      <Icon n={n.icon} /><span>{n.label}</span><kbd className="hint">g {n.key}</kbd>
+    </a>))
+
+  let page
+  if (route === 'deals' && parts[1] && parts[2]) page = <DealPage acct={parts[1]} k={parts[2]} />
+  else if (route === 'accounts') page = <AccountsPage route={parts} />
+  else if (route === 'deals') page = <DealsPage />
+  else if (route === 'people') page = <PeoplePage />
+  else if (route === 'activity') page = <ActivityPage />
+  else if (route === 'moves') page = <MovesPage />
+  else if (route === 'notes') page = <NotesPage />
+  else if (route === 'sync') page = <SyncPage health={health} progress={progress} resync={resync} resyncing={resyncing} resyncError={resyncError} />
+  else if (!book && unreachable) page = <Failed what="the book" />
+  else page = <Home book={book} changed={changed} names={names} markSeen={markSeen} account={account} />
+
   return (
-    <div onPointerDown={clearChanged}>
-      <header className={`bar${banner ? ' stale' : ''}`} role={banner ? 'alert' : undefined}>
-        <div className="bar-in">
-          <span className="brand">Book<b>Tool</b></span>
-          <span className="live"><i className="dot" aria-hidden="true" />{banner ?? (asOf ? `As of ${asOf} · live` : 'Waiting for first sync')}</span>
-          {banner && asOf && !unreachable && <span className="live">figures as of {asOf}</span>}
-          <button type="button" className="resync" onClick={resync} disabled={resyncing}>{resyncing ? 'Resyncing…' : 'Resync now'}</button>
-          {progress && <span className="note" role="status">{progress}</span>}
-          {resyncError && <span className="note err" role="alert">{resyncError}</span>}
+    <DataCtx.Provider value={ctx}>
+      <div className="shell" onPointerDown={clearChanged}>
+        <a className="skip" href="#main" onClick={e => { e.preventDefault(); document.getElementById('main')?.focus() }}>Skip to content</a>
+        <aside className="side" aria-label="Primary">
+          <div className="brand">Book<b>Tool</b></div>
+          <nav className="nav">{links('nav-link')}</nav>
+          <p className="side-foot muted small">Keys: g then h d p a m n s. ⌘K searches.</p>
+        </aside>
+        <div className="content">
+          <header className={`bar${banner ? ' stale' : ''}`}>
+            <button type="button" className="icon-btn menu-btn" aria-label="Open navigation" onClick={() => setNav(true)}><Icon n="menu" /></button>
+            <button type="button" className="search" onClick={() => setPalette(true)} aria-label="Search deals, people, activity"><Icon n="search" size={16} /><span>Search</span><kbd>⌘K</kbd></button>
+            <div className="seg acct" role="group" aria-label="Account filter">
+              {['all', ...accounts.map(([id]) => id)].map(id => (
+                <button key={id} type="button" aria-pressed={account === id} title={id === 'all' ? 'Both accounts' : names[id]} onClick={() => setAccount(id)}>{id === 'all' ? 'All' : id.toUpperCase()}</button>))}
+            </div>
+            <span className="chip" title={book?.as_of ?? undefined}><i className="dot" aria-hidden="true" />{banner ? `Stale${asOf ? ` · as of ${asOf}` : ''}` : asOf ? `As of ${asOf} · live` : 'Waiting for first sync'}</span>
+            <Bell onSeen={markSeen} />
+            <button type="button" className="icon-btn" onClick={toggleTheme} aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}><Icon n={theme === 'dark' ? 'sun' : 'moon'} /></button>
+            <button type="button" className="btn resync" onClick={resync} disabled={resyncing}>{resyncing ? 'Resyncing…' : 'Resync now'}</button>
+          </header>
+          {banner && <div className="banner" role="alert">{banner}</div>}
+          {route !== 'sync' && progress && <div className="banner info" role="status">{progress}</div>}
+          {route !== 'sync' && resyncError && <div className="banner" role="alert">{resyncError}</div>}
+          <div className="sr-only" role="status" aria-live="polite">{note}</div>
+          <main id="main" tabIndex={-1}>{page}</main>
         </div>
-      </header>
-      <div className="sr-only" role="status" aria-live="polite">{note}</div>
-      <main>
-        {book?.changes && <WhatChanged c={book.changes} names={Object.fromEntries(accounts.map(([id, a]) => [id, a.name ?? id]))} onSeen={markSeen} />}
-        {!book ? (unreachable ? null : <Skeleton />)
-          : book.as_of === null ? <div className="calm"><p>Waiting for first sync. Figures appear here once the first data arrives.</p></div>
-          : <div className="columns">{accounts.map(([id, a]) => <Column key={id} aid={id} acc={a} changed={changed} />)}</div>}
-      </main>
-    </div>
+        <Dialog.Root open={nav} onOpenChange={setNav}>
+          <Dialog.Portal>
+            <Dialog.Backdrop className="scrim" />
+            <Dialog.Popup className="drawer left">
+              <div className="row between"><Dialog.Title className="drawer-title">Book Tool</Dialog.Title><Dialog.Close className="icon-btn" aria-label="Close navigation"><Icon n="close" /></Dialog.Close></div>
+              <nav className="nav">{links('nav-link')}</nav>
+            </Dialog.Popup>
+          </Dialog.Portal>
+        </Dialog.Root>
+        <Palette open={palette} setOpen={setPalette} />
+      </div>
+    </DataCtx.Provider>
   )
 }

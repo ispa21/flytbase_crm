@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, act } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, act, within } from '@testing-library/react'
 import App from './App'
 
 const line = (id: string, v: number | null, extra = {}) => ({ id, title: `Deal ${id}`, value: v, currency: 'GBP', receipts: [{ id, kind: 'deal' }], ...extra })
@@ -24,6 +24,7 @@ function mock(o: { book?: any; health?: any; changes?: any; fail?: boolean }) {
 }
 const ok = { stale: false, last_good_poll: '2026-11-14T09:41:00+00:00' }
 
+beforeEach(() => { window.location.hash = '' })
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
 
 test('data loaded: both accounts, bands, currency, receipts, as of', async () => {
@@ -61,7 +62,7 @@ test('missing later answers: no q2..q5 sections', async () => {
   mock({ book: book(), health: ok, changes: { n: 1 } })
   render(<App />)
   await screen.findByText('Acme')
-  expect(screen.queryByText(/Do first|Slipping|People|Not known/)).toBeNull()
+  expect(within(screen.getByRole('main')).queryByText(/Do first|Slipping|People|Not known/)).toBeNull()
 })
 
 test('new data: counter moves, refetch, New tag only on changed', async () => {

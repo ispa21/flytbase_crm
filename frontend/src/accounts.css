@@ -1,0 +1,27 @@
+/* Accounts list + account page. Uses the shell's tokens only; no new colours. */
+.acct-name { display: flex; align-items: center; gap: 12px; }
+.acct-mark { width: 36px; height: 36px; flex: none; display: grid; place-items: center; border-radius: var(--r-md); background: var(--ink); color: var(--paper); font: 600 15px/1 var(--sans); }
+.acct-link { font-weight: 600; text-decoration: none; }
+.acct-link:hover { text-decoration: underline; }
+.acct-head { display: flex; flex-wrap: wrap; align-items: center; gap: 16px 20px; margin-bottom: 16px; }
+.acct-head h1 { font: 600 28px/1.15 var(--sans); letter-spacing: -0.02em; }
+.acct-head .acct-mark { width: 48px; height: 48px; font-size: 20px; }
+.acct-crumb { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+.acct-crumb a { color: var(--accent); }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 24px; overflow-x: auto; }
+.tabs a { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px; text-decoration: none; color: var(--muted); font-weight: 500; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; transition: color 150ms ease, border-color 150ms ease; }
+@media (hover: hover) and (pointer: fine) { .tabs a:hover { color: var(--ink); } }
+.tabs a[aria-current='page'] { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
+.tabs .count { font: 500 12px/1 var(--mono); color: var(--muted); }
+.acct-cols { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 1080px) { .acct-cols { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); } }
+.acct-cols h2 { font: 600 13px/1 var(--sans); letter-spacing: .08em; text-transform: uppercase; margin-bottom: 12px; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 20px; }
+.kv dt { color: var(--muted); }
+.kv dd { text-align: right; font-weight: 600; }
+.mini-move { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+.mini-move:first-of-type { border-top: 0; padding-top: 0; }
+.mini-move .n { width: 28px; height: 28px; border-radius: var(--r-full); display: grid; place-items: center; background: var(--ink); color: var(--paper); font: 600 13px/1 var(--sans); }
+.person-row { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line); }
+.person-row:first-child { border-top: 0; }
+.composer textarea { width: 100%; }

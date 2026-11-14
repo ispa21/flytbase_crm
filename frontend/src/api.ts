@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 
 export type Receipt = { id: string; kind: string; status?: string }
 export type Line = {
@@ -24,7 +24,13 @@ export type RiskItem = {
   kind: string; level: 'red' | 'amber' | null; deal: string | null; text: string; turns_bad_on: string; receipts: Receipt[]
 }
 export type Q4 = { today: string; loaded: boolean; signals_loaded: boolean; items: RiskItem[]; gaps: string[] }
-export type Account = { name: string | null; q1?: Q1; q2?: Q2; q3?: unknown; q4?: Q4; q5?: Q5 }
+export type Move = {
+  rank: number; kind: string; action: string; why_now: string; owner: string; with?: string; due: string; due_basis?: string
+  turns_bad_on?: string; level?: 'red' | 'amber' | null; deal: { id: string; title: string } | null; receipts: Receipt[]
+  draft_note: { kind: string; text: string }
+}
+export type Q3 = { loaded: boolean; moves: Move[] }
+export type Account = { name: string | null; q1?: Q1; q2?: Q2; q3?: Q3; q4?: Q4; q5?: Q5 }
 export type Gap = {
   kind: string; text: string; deals: { id: string; title: string; value: number | null; currency: string }[]
   value_at_stake: number | null; unpriced_deals: number; who_could_fill: string; receipts: Receipt[]
@@ -37,7 +43,33 @@ export type Changes = {
   new_signals: { id: string; account?: string | null; title?: string | null; first_seen: number; receipts: Receipt[] }[]
 }
 export type Book = { as_of: string | null; state: string; accounts: Record<string, Account>; changes?: Changes }
-export type Health = { stale: boolean; last_good_poll: string | null; resync_at?: string | null; pending_calls?: number }
+export type Health = {
+  stale: boolean; last_good_poll: string | null; resync_at?: string | null; pending_calls?: number; now?: string; reachable?: boolean
+  last_error?: { at: string | null; message: string } | null; changes?: number
+  fetched?: { tool: string; args?: unknown; fetched_at: string | null; age_s: number }[]
+}
+export type Person = {
+  id: string; account: string; name: string; title?: string | null; org?: string | null; side: 'customer' | 'flytbase'
+  role_tags: string[]; standing?: string | null; deals: (string | { id: string; title?: string; role?: string })[]; receipts: Receipt[]
+}
+export type ActivityKind = 'email' | 'call' | 'request' | 'ticket' | 'signal' | 'invoice'
+export type ActivityItem = {
+  id: string; account: string; kind: ActivityKind; dated: string | null; title: string; summary?: string | null
+  deal: string | null; receipts: Receipt[]
+}
+export type NoteStatus = 'queued' | 'saved' | 'failed'
+export type Note = {
+  id: string | number; account: string; deal?: string | null; text: string; status: NoteStatus
+  created_at?: string | null; saved_at?: string | null; error?: string | null
+}
+
+/** Shared by every page: the one book, health, and the account filter. */
+export type Ctx = {
+  book: Book | null; health: Health | null; unreachable: boolean; account: string; mcpDown: boolean
+  names: Record<string, string>; asOf: string | null
+}
+export const DataCtx = createContext<Ctx>({ book: null, health: null, unreachable: false, account: 'all', mcpDown: false, names: {}, asOf: null })
+export const useData = () => useContext(DataCtx)
 
 const get = async <T,>(url: string): Promise<T> => {
   const r = await fetch(url)
@@ -130,4 +162,34 @@ export function useBook() {
 
   const clearChanged = useCallback(() => setChanged(s => (s.size ? new Set() : s)), [])
   return { book, markSeen, health, unreachable, changed, clearChanged, resync, resyncing, resyncError }
+}
+
+export type Api<T> = { data: T | null; state: 'loading' | 'ok' | 'na' | 'error'; reload: () => void }
+/** One GET, reloaded on demand or on an interval. 404 means the backend does not have it yet. */
+export function useApi<T>(url: string | null, every?: number): Api<T> {
+  const [r, setR] = useState<{ data: T | null; state: Api<T>['state'] }>({ data: null, state: 'loading' })
+  const [n, setN] = useState(0)
+  useEffect(() => {
+    if (!url) return
+    let dead = false
+    const go = async () => {
+      try {
+        const res = await fetch(url)
+        if (dead) return
+        if (res.status === 404) return setR({ data: null, state: 'na' })
+        if (!res.ok) throw new Error(String(res.status))
+        setR({ data: await res.json(), state: 'ok' })
+      } catch { if (!dead) setR(p => ({ data: p.data, state: p.data ? 'ok' : 'error' })) }
+    }
+    go()
+    const t = every ? setInterval(go, every) : undefined
+    return () => { dead = true; if (t) clearInterval(t) }
+  }, [url, every, n])
+  return { ...r, reload: useCallback(() => setN(x => x + 1), []) }
+}
+
+export async function postNote(n: { account: string; deal?: string | null; text: string; source?: string }): Promise<{ id: string | number; status: NoteStatus }> {
+  const r = await fetch('/api/notes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(n) })
+  if (!r.ok) throw new Error(r.status === 404 ? 'Saving notes is not available yet' : `Save failed (${r.status})`)
+  return r.json()
 }

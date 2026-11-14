@@ -17,7 +17,7 @@ Visual identity is in `DESIGN.md`; tokens are cited as `{path.to.token}`. Spines
 
 ## Foundation
 
-Single-surface responsive web, one page, no routes needed for v1. React + Vite + TypeScript, served by the same Vercel project as the API. Desktop first (judge on a laptop or projector), usable at 360px.
+Responsive web app with a CRM shell and hash routes (no router dependency). Home is the two-account briefing; the other routes are working views of the same data. React + Vite + TypeScript, served by the same Vercel project as the API. Desktop first (judge on a laptop or projector), usable at 360px.
 
 **UI library (pick-ui-library): base-ui.** One library for the accessible primitives this page needs: Collapsible (every disclosure row), Popover (long receipt ids). It is unstyled, so `DESIGN.md` tokens apply untouched as plain CSS variables, with no theme to fight. Toasts (save confirmation) add Sonner only if the save state line proves too quiet. Not chosen: a styled kit, because the page is typography and disclosure, not widgets.
 
@@ -26,6 +26,18 @@ The page opens on its content: both accounts, no click, no query, no selection. 
 **The five answers are never labelled as questions.** The reader sees what they would read in a good handover note. The mapping is below.
 
 ## Information Architecture
+
+### App shell (v2)
+
+| Part | Behaviour |
+|---|---|
+| Left sidebar | Home, Accounts, Deals, People, Activity, Moves, Notes, Sync. Below 860px it becomes a drawer behind a menu button. Keys: `g` then `h c d p a m n s`. |
+| Top bar | Search and command palette (Cmd/Ctrl+K, client-side over deals, people, activity), account filter All/A/B, freshness chip, What Changed bell, theme toggle (light/dark), Resync now. A stale or unreachable banner sits under the bar. |
+| Routes | `#/` Home, `#/accounts`, `#/deals` (table or board), `#/deals/<acct>/<id>` deal detail, `#/people` (detail drawer), `#/activity`, `#/moves`, `#/notes`, `#/sync`. |
+
+The five answers stay woven in, never as labelled Q&A: worth lives in Home and Deals (value with receipts, per currency), power in the deal detail grid and People, first moves in Moves (and Do first on Home), what goes wrong in the Risk column and deal detail, unknowns in deal detail and Home. Moves holds the approve flow: Review note opens an editable inline preview, then one explicit Approve and save to CRM button (disabled with a reason while the MCP is unreachable) with queued/saved/failed status. Feeds the backend has not published (people, activity, notes) show a calm "not available yet" state.
+
+### Home (original single page)
 
 One page, top to bottom.
 
