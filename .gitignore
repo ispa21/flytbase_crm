@@ -1,0 +1,18 @@
+# secrets and local state
+.env
+.env.*
+*.db
+*.sqlite*
+.vercel/
+# recorded CRM data (test fixtures, kept local: emails, player id)
+mcp-cache/
+# build and tooling
+.venv/
+node_modules/
+__pycache__/
+.pytest_cache/
+dist/
+.DS_Store
+graphify-out/
+.claude/
+_bmad/render/
