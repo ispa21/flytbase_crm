@@ -86,3 +86,21 @@ main { max-width: 1200px; margin: 0 auto; padding: 32px 16px 64px; }
 .resync-note { font-weight: 600; letter-spacing: .02em; }
 .resync-err { color: var(--risk-red); }
 @media (prefers-reduced-motion: reduce) { .resync { transition: none; } .resync:active:not(:disabled) { transform: none; } }
+
+.urgent.after { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.urgent .display { font-size: clamp(18px, 2vw, 22px); margin: 0 0 8px; }
+.power { margin-top: 4px; }
+.power-head { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0; background: none; border: 0; cursor: pointer; font: 600 13px/18px var(--font); color: var(--accent); text-align: left; }
+.power-head[data-panel-open] .chev { transform: rotate(90deg); }
+.power .panel { padding: 0; }
+.role { display: flex; flex-direction: column; gap: 6px; padding: 12px 0; border-top: 1px solid var(--line); }
+.person { display: flex; flex-direction: column; gap: 6px; }
+.stands { font-weight: 600; }
+.risks { margin-top: 16px; }
+.risks .chip { background: none; color: var(--risk-red); border-color: var(--risk-red); }
+.risk-list, .risk-gaps { list-style: none; margin: 0; padding: 0; }
+.risk-item { display: flex; flex-direction: column; gap: 8px; padding: 16px 0; border-top: 1px solid var(--line); }
+.risk-gaps { padding: 12px 0 16px; border-top: 1px solid var(--line); }
+.level { font: 700 12px/16px var(--font); letter-spacing: .04em; text-transform: uppercase; }
+.level-red { color: var(--risk-red); }
+.level-amber { color: var(--risk-amber); }

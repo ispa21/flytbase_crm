@@ -11,7 +11,20 @@ export type Q1 = {
   bands: Record<BandKey, Line[]>
   totals: Record<Exclude<BandKey, 'unpriced'>, { by_currency: Record<string, number>; receipts: Receipt[] }>
 }
-export type Account = { name: string | null; q1?: Q1; q2?: unknown; q3?: unknown; q4?: unknown; q5?: unknown }
+export type Entry = {
+  who?: string | null; title?: string | null; stands?: string; text?: string; status?: string; role?: string
+  gap?: string | null; unnamed_logins?: number; usage_by?: string; paid_invoices?: string[]
+  sign_ins_last_90_days?: number; backing?: string; receipts: Receipt[]
+}
+export type RoleKey = 'decides' | 'pays' | 'uses' | 'could_block'
+export type Cell = { status: string; entries: Entry[]; gap?: string }
+export type DealPower = { deal: string; title: string; roles: Record<RoleKey, Cell>; voices: Entry[] }
+export type Q2 = { loaded: boolean; deals: DealPower[]; gaps: { deal: string; role: string; why: string }[] }
+export type RiskItem = {
+  kind: string; level: 'red' | 'amber' | null; deal: string | null; text: string; turns_bad_on: string; receipts: Receipt[]
+}
+export type Q4 = { today: string; loaded: boolean; signals_loaded: boolean; items: RiskItem[]; gaps: string[] }
+export type Account = { name: string | null; q1?: Q1; q2?: Q2; q3?: unknown; q4?: Q4; q5?: unknown }
 export type Book = { as_of: string | null; state: string; accounts: Record<string, Account> }
 export type Health = { stale: boolean; last_good_poll: string | null; resync_at?: string | null; pending_calls?: number }
 

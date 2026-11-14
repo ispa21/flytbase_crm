@@ -116,3 +116,64 @@ test('progress text from health alone; none when no calls pending', async () => 
   render(<App />)
   expect(await screen.findByText('Resyncing · 1 call left (about 1 minute, 1 call a minute)')).toBeInTheDocument()
 })
+
+const cell = (entries: any[], gap?: string) => ({ status: entries.length ? 'backed' : 'gap', entries, ...(entries.length ? {} : { gap: gap ?? 'not on file' }) })
+const q2 = {
+  loaded: true,
+  deals: [{
+    deal: 'd1', title: 'Deal d1',
+    roles: {
+      decides: cell([{ who: 'Priya Nair', title: 'COO', person_named: true, stands: 'champion', stakeholder: 's1', receipts: [{ id: 'acme/contract.txt', kind: 'record' }, { id: 's1', kind: 'stakeholder' }] }]),
+      pays: cell([{ who: 'Acme Finance', paid_invoices: ['INV-1'], stands: 'not on file', receipts: [{ id: 'acme/invoices.json', kind: 'record' }] }]),
+      uses: cell([{ who: null, unnamed_logins: 4, sign_ins_last_90_days: 12, gap: 'names not on file', stands: 'not on file', receipts: [{ id: 'acme/users.json', kind: 'record' }] }]),
+      could_block: cell([], 'no open blocker or request on file'),
+    },
+    voices: [],
+  }],
+  gaps: [{ deal: 'd1', role: 'could_block', why: 'no open blocker or request on file' }],
+}
+const q4 = {
+  today: '2026-11-14', loaded: true, signals_loaded: true,
+  items: [
+    { kind: 'renewal', level: 'red', deal: 'd1', text: 'Renewal term ends 2027-01-31, 78 days left; open blocker', turns_bad_on: '2026-11-02', receipts: [{ id: 'd1', kind: 'deal' }, { id: 'acme/contract.txt', kind: 'record' }] },
+    { kind: 'cold', level: null, deal: null, text: 'Sam Lee: email of 2026-10-20 has no reply, 25 days', turns_bad_on: '2026-11-03', receipts: [{ id: 'acme/emails/1.txt', kind: 'record' }] },
+    { kind: 'stuck', level: null, deal: 'd2', text: 'Deadline has no date: go-live', turns_bad_on: 'not on file', receipts: [{ id: 'd2', kind: 'deal' }] },
+  ],
+  gaps: ['signals not fetched yet'],
+}
+
+test('q4: most urgent in lead, ordered list with turns-bad-on and receipts, gaps', async () => {
+  mock({ book: book({ accounts: { a: { name: 'Acme', q1: q1(), q4 }, b: { name: 'Beta', q1: q1() } } }), health: ok, changes: { n: 1 } })
+  render(<App />)
+  await screen.findByText('Acme')
+  expect(screen.getAllByText(q4.items[0].text)).toHaveLength(1) // lead only, list collapsed
+  fireEvent.click(screen.getByRole('button', { name: /Slipping/ }))
+  await waitFor(() => expect(screen.getAllByText(q4.items[0].text)).toHaveLength(2))
+  expect(await screen.findByText(/Sam Lee: email/)).toBeInTheDocument()
+  expect(screen.getByText('Turns bad on 2026-11-03')).toBeInTheDocument()
+  expect(screen.getByText('Turn date not on file')).toBeInTheDocument()
+  expect(screen.getByText('acme/emails/1.txt')).toBeInTheDocument()
+  expect(screen.getByText(/Not checked: signals not fetched yet/)).toBeInTheDocument()
+  expect(screen.getAllByRole('button', { name: /Slipping/ })).toHaveLength(1) // Beta has no q4
+})
+
+test('q2: per-deal power in the expanded row, gaps shown as not on file', async () => {
+  mock({ book: book({ accounts: { a: { name: 'Acme', q1: q1(), q2 }, b: { name: 'Beta', q1: q1() } } }), health: ok, changes: { n: 1 } })
+  render(<App />)
+  await screen.findByText('Acme')
+  fireEvent.click(screen.getAllByRole('button', { name: /On contract/ })[0])
+  fireEvent.click(await screen.findByRole('button', { name: /Who decides, pays/ }))
+  expect(await screen.findByText('Priya Nair, COO')).toBeInTheDocument()
+  expect(screen.getByText(/champion/)).toBeInTheDocument()
+  expect(screen.getByText('4 unnamed logins')).toBeInTheDocument()
+  expect(screen.getByText('s1')).toBeInTheDocument()
+  expect(screen.getByText(/not on file: no open blocker/)).toBeInTheDocument()
+  expect(screen.getAllByRole('button', { name: /Who decides, pays/ })).toHaveLength(1) // only d1 has q2
+})
+
+test('no q2/q4 keys: no power or slipping sections', async () => {
+  mock({ book: book(), health: ok, changes: { n: 1 } })
+  render(<App />)
+  await screen.findByText('Acme')
+  expect(screen.queryByText(/Slipping|Who decides/)).toBeNull()
+})
