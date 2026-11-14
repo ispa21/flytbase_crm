@@ -134,3 +134,61 @@ def test_q2_receipt_check_strict(db):
     with pytest.raises(ReceiptError):
         check_receipts({"deals": [{"receipts": [{"id": "B/nope.txt", "kind": "record"}]}]}, {("record", "B/contract.txt")}, strict=True)
     assert q["gaps"]
+
+
+# ---- story 4.1: what is about to go wrong ----
+from datetime import date  # noqa: E402
+
+TODAY = date(2026, 11, 14)
+
+
+def load4(db):
+    for f in ("flight_log_by_plant", "flight_log_force_month"):
+        db.add_snapshot("get_file", {"id": f}, unwrap(fixture("get_file", {"id": f})), 1000.0)
+    db.add_snapshot("get_signals", {}, unwrap(fixture("get_signals", {})), 1000.0)
+    for tool, args in [("get_my_accounts", {}), ("get_all_paperwork", {"account": "A"}), ("get_all_paperwork", {"account": "B"})]:
+        db.add_snapshot(tool, args, unwrap(fixture(tool, args)), 1000.0)
+    return build_book(db, strict=True, today=TODAY)["accounts"]
+
+
+def of(q, kind):
+    return [i for i in q["items"] if i["kind"] == kind]
+
+
+def test_q4_renewal(db):
+    a, b = (load4(db)[k]["q4"] for k in "AB")
+    ra, rb = of(a, "renewal")[0], of(b, "renewal")[0]
+    assert rb["level"] == "red" and rb["deal"] == "b_renewal" and rb["days_left"] == 78
+    assert ra["level"] == "amber" and ra["turns_bad_on"] == "2026-11-30" and ra["days_left"] == 106
+    assert {"id": "A/contract.txt", "kind": "record"} in ra["receipts"]
+    assert [i["level"] for i in b["items"]][0] == "red"  # red sorts first
+
+
+def test_q4_cold_stuck_usage(db):
+    a, b = (load4(db)[k]["q4"] for k in "AB")
+    cold = {i["who"]: i for i in of(a, "cold") + of(b, "cold")}
+    assert cold["Insp. Karen Mbeki"]["days_waiting"] == 95 and cold["Insp. Karen Mbeki"]["turns_bad_on"] == "2026-08-25"
+    assert cold["Insp. Karen Mbeki"]["receipts"][0]["id"] == "A/emails/2026-08-11_karen_batteries.txt"
+    assert next(i for k, i in cold.items() if k.startswith("Group Finance"))["days_waiting"] == 37
+    assert [i["ticket"] for i in of(a, "stuck") if "ticket" in i] == ["FB-10412"]
+    assert any("b_idle" == i["deal"] and "no date" in i["text"] for i in of(b, "stuck"))
+    assert any(i["deal"] == "b_renewal" and "Finance cannot verify" in i["text"] for i in of(b, "stuck"))
+    drop = of(a, "usage_drop")
+    assert [(d["force"], d["text"]) for d in drop] == [("Metro Central", "Metro Central: docks with live flights 8 in 2026-08, 3 in 2026-10")]
+    assert {"id": "flight_log_force_month", "kind": "file"} in drop[0]["receipts"]
+
+
+def test_q4_signals_keep_own_date(db):
+    a, b = (load4(db)[k]["q4"] for k in "AB")
+    sg = {i["receipts"][0]["id"]: i for i in of(a, "signal")}
+    assert sg["champion_leaves"]["dated"] == "2026-11-17" and sg["urgent_request"]["dated"] == "2026-11-18"
+    assert {"id": "A/emails/2026-11-17_rhys_moving.txt", "kind": "record"} in sg["champion_leaves"]["receipts"]
+    assert of(b, "signal") == [] and a["today"] == "2026-11-14"
+
+
+def test_q4_without_paperwork_or_signals(db):
+    db.add_snapshot("get_my_accounts", {}, unwrap(fixture("get_my_accounts", {})), 1000.0)
+    q = build_book(db, strict=True, today=TODAY)["accounts"]["B"]["q4"]
+    assert q["loaded"] is False and q["signals_loaded"] is False
+    assert not of(q, "renewal") and not of(q, "cold") and q["gaps"]
+    assert [i["kind"] for i in q["items"]] == ["stuck"] * 4  # 3 open blockers + 1 undated deadline, all from the export

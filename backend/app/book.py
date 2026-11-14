@@ -1,13 +1,13 @@
-"""Q1 "what is the book worth" (ADR 0001) and Q2 "who holds the power": pure logic over stored snapshots. No I/O except build_book's reads."""
+"""Q1 "what is the book worth" (ADR 0001), Q2 "who holds the power" and Q4 "what is about to go wrong": pure logic over stored snapshots. No I/O except build_book's reads."""
 import csv
 import io
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 log = logging.getLogger("aq.book")
-KINDS = {"fact", "file", "record", "deal", "offer", "stakeholder"}
+KINDS = {"fact", "file", "record", "deal", "offer", "stakeholder", "ticket", "signal"}
 
 
 class ReceiptError(AssertionError):
@@ -26,6 +26,11 @@ def _known(acc_data, paperwork):
     k |= {("stakeholder", s["id"]) for s in acc_data.get("stakeholders") or []}
     k |= {("file", f["id"]) for f in acc_data.get("_files") or []}
     k |= {("record", _rec(acc_data["id"], r["path"])) for r in (paperwork or {}).get("records") or []}
+    k |= {("ticket", t["id"]) for r in (paperwork or {}).get("records") or [] if r["path"] == "tickets.json"
+          for t in (r.get("data") or {}).get("tickets") or []}
+    for sg in (x for x in acc_data.get("_signals") or [] if x.get("id")):
+        k.add(("signal", sg["id"]))
+        k |= {("record", r["path"]) for r in sg.get("records") or [] if r.get("path")}  # signal paths already carry the account
     return k
 
 
@@ -356,22 +361,127 @@ def _iso(t):
     return f"{m.group(3)}-{_MON.get(m.group(2)[:3].lower(), 0):02d}-{int(m.group(1)):02d}" if m else ""
 
 
-def band_deals(my_accounts, paperwork_by_acc, strict=False, file_text=None):
-    """-> {account id: {q1, q2}}. Receipts are checked against the same snapshots."""
+# ---- Q4: what is about to go wrong (story 4.1) ----
+NA = "not on file"
+RED_DAYS, AMBER_DAYS, COLD_DAYS = 90, 120, 14
+
+
+def _account_q4(acc, files, paperwork, file_text, signals, today):
+    aid = acc["id"]
+    recs = {r["path"]: r for r in (paperwork or {}).get("records") or []}
+    data = lambda p: (recs.get(p) or {}).get("data") or {}  # noqa: E731
+    text = lambda p: (recs.get(p) or {}).get("text") or ""  # noqa: E731
+    rr = lambda p: {"id": _rec(aid, p), "kind": "record"}  # noqa: E731
+    stak = {s["name"]: s for s in acc.get("stakeholders") or []}
+    items, gaps = [], []
+
+    def add(kind, text_, receipts, level=None, deal=None, turns=NA, **kw):
+        items.append({"kind": kind, "level": level, "deal": deal, "text": text_, "turns_bad_on": turns, "receipts": receipts, **kw})
+
+    if paperwork is None:
+        gaps.append("paperwork not loaded: renewal, going-cold and ticket checks not run")
+    if signals is None:
+        gaps.append("signals not fetched yet")
+
+    # renewal: needs term_ends (profile.json) and the signer (contract.txt)
+    term = (data("profile.json").get("renewal") or {}).get("term_ends")
+    sg = _contract_signer(text("contract.txt"))
+    for o in acc.get("opportunities") or []:
+        if not o["title"].startswith("Renew") or not term:
+            continue
+        days = (date.fromisoformat(term) - today).days
+        blocked = (o.get("blocker") or {}).get("status") == "open"
+        unnamed = sg is not None and not sg["named"]
+        if sg is None:
+            gaps.append(f"{o['id']}: signer not on file (contract.txt has no Signed line)")
+        cond = blocked or unnamed
+        if days >= AMBER_DAYS or days < 0:
+            continue
+        red_on = (date.fromisoformat(term) - timedelta(days=RED_DAYS)).isoformat()
+        why = [w for w, c in (("open blocker", blocked), ("signer is not a named person", unnamed)) if c]
+        add("renewal", f"Renewal term ends {term}, {days} days left" + (f"; {' and '.join(why)}" if why else ""),
+            [{"id": o["id"], "kind": "deal"}, rr("contract.txt"), rr("profile.json")],
+            level="red" if days < RED_DAYS and cond else "amber", deal=o["id"], turns=red_on if cond else NA,
+            days_left=days, term_ends=term)
+
+    # going cold: customer email with a "No reply" trailer, older than 14 days
+    for p, r in recs.items():
+        t = r.get("text") or ""
+        who = (re.search(r"^From: (.+)$", t, re.M) or [None, ""])[1].strip()
+        d = _iso(t)
+        if p.startswith("emails/") and "FlytBase" not in who and d and re.search(r"\[[^\]]*No reply", t):
+            waited = (today - date.fromisoformat(d)).days
+            if waited > COLD_DAYS:
+                s = stak.get(who)
+                add("cold", f"{who}: email of {d} has no reply, {waited} days",
+                    [rr(p)] + ([{"id": s["id"], "kind": "stakeholder"}] if s else []),
+                    turns=(date.fromisoformat(d) + timedelta(days=COLD_DAYS)).isoformat(), days_waiting=waited, dated=d, who=who)
+
+    # stuck: open blocker, open ticket with no owner, deadline with no date
+    dl_text = set()
+    for o in acc.get("opportunities") or []:
+        if (o.get("blocker") or {}).get("status") == "open":
+            add("stuck", f"Open blocker: {o['blocker']['text']}", [{"id": o["id"], "kind": "deal"}], deal=o["id"])
+        dl = o.get("deadline")
+        if dl:
+            dl_text.add(dl.get("text"))
+            if not (dl.get("date") or dl.get("minute")):
+                add("stuck", f"Deadline has no date: {dl['text']}", [{"id": o["id"], "kind": "deal"}], deal=o["id"])
+    gaps += [f"deadline has no date and no deal, no id to cite: {d['text']}" for d in acc.get("deadlines") or [] if d.get("text") not in dl_text]
+    for t in data("tickets.json").get("tickets") or []:
+        if t["status"] != "Closed" and not t.get("assignee"):
+            add("stuck", f"{t['id']} ({t['subject']}) is {t['status'].lower()} with no owner since {t['opened']}",
+                [{"id": t["id"], "kind": "ticket"}, rr("tickets.json")], ticket=t["id"], dated=t["opened"])
+
+    # usage drop: latest month on file against two months earlier, down 50% or more
+    fl = next((f for f in files if f.get("account") == aid and (file_text or {}).get(f["id"])), None)
+    if fl:
+        c = clean_flight_log(file_text[fl["id"]])
+        k = c["entity_kind"]
+        label = "docks with live flights" if k == "force" else "patrol + test flights"
+        metric = (lambda r: r["docks_with_live_flights"]) if k == "force" else \
+            (lambda r: None if r["patrol_flights"] is None or r["test_flights"] is None else r["patrol_flights"] + r["test_flights"])
+        by = {}
+        for r in c["rows"]:
+            by.setdefault(r[k], {})[r["month"]] = metric(r)
+        for e, m in by.items():
+            last = max(m)
+            y, mo = int(last[:4]), int(last[5:]) - 2
+            prev = f"{y - (mo < 1):04d}-{mo + 12 * (mo < 1):02d}"
+            a, b = m.get(prev), m[last]
+            if a and b is not None and b * 2 <= a:
+                add("usage_drop", f"{'Plant ' if k == 'plant' else ''}{e}: {label} {a} in {prev}, {b} in {last}", [{"id": fl["id"], "kind": "file"}],
+                    turns=f"already down ({last})", **{k: e})
+
+    # signals: shown verbatim with their own date
+    for s in signals or []:
+        if s.get("account") == aid and s.get("id"):
+            add("signal", f"{s['title']}: {s['summary']}", [{"id": s["id"], "kind": "signal"}] +
+                [{"id": r["path"], "kind": "record"} for r in s.get("records") or [] if r.get("path")], dated=s.get("dated"))
+    items.sort(key=lambda i: {"red": 0, "amber": 1}.get(i["level"], 2))
+    return {"today": today.isoformat(), "loaded": paperwork is not None, "signals_loaded": signals is not None,
+            "items": items, "gaps": gaps}
+
+
+def band_deals(my_accounts, paperwork_by_acc, strict=False, file_text=None, signals=None, today=None):
+    """-> {account id: {q1, q2, q4}}. Receipts are checked against the same snapshots."""
     out = {}
+    today = today or date.today()
     files = my_accounts.get("files") or []
     for acc in my_accounts.get("accounts") or []:
         pw = paperwork_by_acc.get(acc["id"])
         q1 = _account_q1(acc, files, pw)
         q2 = _account_q2(acc, files, pw, file_text)
-        known = _known({**acc, "_files": files}, pw)
+        q4 = _account_q4(acc, files, pw, file_text, signals, today)
+        known = _known({**acc, "_files": files, "_signals": signals}, pw)
         check_receipts(q1, known, strict)
         check_receipts(q2, known, strict)
-        out[acc["id"]] = {"q1": q1, "q2": q2, "name": acc.get("name")}
+        check_receipts(q4, known, strict)
+        out[acc["id"]] = {"q1": q1, "q2": q2, "q4": q4, "name": acc.get("name")}
     return out
 
 
-def build_book(db, strict=False):
+def build_book(db, strict=False, today=None):
     ma = db.latest("get_my_accounts")
     if not ma or not isinstance(ma[0], dict):
         return {"as_of": None, "state": "waiting for first sync", "accounts": {}}
@@ -386,5 +496,9 @@ def build_book(db, strict=False):
         if s and isinstance(s[0], dict):
             ft[f["id"]] = s[0].get("text")
             times.append(s[1])
+    sg = db.latest("get_signals")
+    signals = sg[0].get("signals") or [] if sg and isinstance(sg[0], dict) else None
+    if sg:
+        times.append(sg[1])
     return {"as_of": datetime.fromtimestamp(min(times), timezone.utc).isoformat(),  # oldest input = honest freshness
-            "state": "ok", "accounts": band_deals(ma[0], pw, strict, ft)}
+            "state": "ok", "accounts": band_deals(ma[0], pw, strict, ft, signals, today)}
