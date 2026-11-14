@@ -6,6 +6,8 @@ import logging
 import re
 from datetime import date, datetime, timedelta, timezone
 
+from .sync import account_ids
+
 log = logging.getLogger("aq.book")
 KINDS = {"fact", "file", "record", "deal", "offer", "stakeholder", "ticket", "signal"}
 
@@ -132,12 +134,19 @@ def _account_q1(acc, files, paperwork):
                 r.append({"id": stak[o["pitch_to"]], "kind": "stakeholder"})
             bands["backed_upside"].append(line(o["id"], o["title"], o["value"], r, pitch_to=o.get("pitch_to")))
 
+    dh = (recs.get("deal_history.json") or {}).get("data") or {}
+    if contract and renewal_value and not bands["on_contract"]:  # contract on file, no renewal deal in the export (paperwork-only account)
+        it = next((i for i in dh.get("on_file_as_open_at_handover") or [] if "renewal" in _words(i["what"])), None)
+        bands["on_contract"].append(line(
+            None, it["what"] if it else "Renewal of the contract", renewal_value,
+            [{"id": _rec(aid, p), "kind": "record"} for p in ("contract.txt", "profile.json") + (("deal_history.json",) if it else ())],
+            renewal_risk=True, term_ends=(prof.get("renewal") or {}).get("term_ends"), stage=None, blocker=None))
+
     # deals named only in paperwork or by a person: no opportunity covers them -> Unbacked, no value
     covered = {w for o in acc.get("opportunities") or [] for w in o["id"].split("_")}
-    dh = (recs.get("deal_history.json") or {}).get("data") or {}
     for item in dh.get("on_file_as_open_at_handover") or []:
         words = _words(item["what"])
-        if words & covered:
+        if words & covered or ("renewal" in words and bands["on_contract"]):
             continue
         topic = [f for f in facts.values() if len(f["id"].split("_")) > 1 and f["id"].split("_")[1] in words]
         bands["unbacked"].append(line(
@@ -356,7 +365,8 @@ def _account_q2(acc, files, paperwork, file_text):
             "could_block": _cell(blk, "no open blocker or request on file")}, "voices": voices})
     gaps = [{"deal": d["deal"], "role": r, "why": c["gap"]} for d in deals for r, c in d["roles"].items() if c["status"] == "gap"]
     gaps += [{"deal": d["deal"], "role": r, "why": e["gap"]} for d in deals for r, c in d["roles"].items() for e in c["entries"] if e.get("gap")]
-    return {"loaded": paperwork is not None, "deals": deals, "flight_log": log, "gaps": gaps}
+    return {"loaded": paperwork is not None, "deals": deals, "flight_log": log, "gaps": gaps,
+            "contract": {"decides": _cell(dec), "pays": _cell(pays), "uses": _cell(uses)}}  # account-wide, for a renewal with no deal
 
 
 def _iso(t):
@@ -389,22 +399,24 @@ def _account_q4(acc, files, paperwork, file_text, signals, today):
     # renewal: needs term_ends (profile.json) and the signer (contract.txt)
     term = (data("profile.json").get("renewal") or {}).get("term_ends")
     sg = _contract_signer(text("contract.txt"))
-    for o in acc.get("opportunities") or []:
-        if not o["title"].startswith("Renew") or not term:
+    renewals = [o for o in acc.get("opportunities") or [] if o["title"].startswith("Renew")] or [None]  # None: contract, no deal
+    for o in renewals:
+        if not term:
             continue
+        oid = o["id"] if o else None
         days = (date.fromisoformat(term) - today).days
-        blocked = (o.get("blocker") or {}).get("status") == "open"
+        blocked = ((o or {}).get("blocker") or {}).get("status") == "open"
         unnamed = sg is not None and not sg["named"]
         if sg is None:
-            gaps.append(f"{o['id']}: signer not on file (contract.txt has no Signed line)")
+            gaps.append(f"{oid or 'contract'}: signer not on file (contract.txt has no Signed line)")
         cond = blocked or unnamed
         if days >= AMBER_DAYS or days < 0:
             continue
         red_on = (date.fromisoformat(term) - timedelta(days=RED_DAYS)).isoformat()
         why = [w for w, c in (("open blocker", blocked), ("signer is not a named person", unnamed)) if c]
         add("renewal", f"Renewal term ends {term}, {days} days left" + (f"; {' and '.join(why)}" if why else ""),
-            [{"id": o["id"], "kind": "deal"}, rr("contract.txt"), rr("profile.json")],
-            level="red" if days < RED_DAYS and cond else "amber", deal=o["id"], turns=red_on if cond else NA,
+            ([{"id": oid, "kind": "deal"}] if o else []) + [rr(p) for p in ("contract.txt", "profile.json") if p in recs],
+            level="red" if days < RED_DAYS and cond else "amber", deal=oid, turns=red_on if cond else NA,
             days_left=days, term_ends=term)
 
     # going cold: customer email with a "No reply" trailer, older than 14 days
@@ -537,7 +549,7 @@ def _account_q3(acc, q1, q2, q4, q5, paperwork, today):
         d, t, k = i["deal"], i["turns_bad_on"], i["kind"]
         title = deals[d][0] if d in deals else None
         if k == "renewal":
-            cand(0 if i["level"] == "red" else 1, k, f"Clear what blocks {title}: name the signer or settle the open blocker", i["text"],
+            cand(0 if i["level"] == "red" else 1, k, f"Clear what blocks {title or 'the contract renewal'}: name the signer or settle the open blocker", i["text"],
                  i["receipts"], d, t, i["level"])
         elif k == "cold":
             cand(2, k, f"Reply to {i['who']}", i["text"], i["receipts"], None, t, with_=i["who"])
@@ -576,7 +588,8 @@ def _account_q3(acc, q1, q2, q4, q5, paperwork, today):
 
 
 def band_deals(my_accounts, paperwork_by_acc, strict=False, file_text=None, signals=None, today=None):
-    """-> {account id: {q1, q2, q3, q4, q5}}. Receipts are checked against the same snapshots."""
+    """-> {account id: {q1, q2, q3, q4, q5, radar, power}}. Receipts are checked against the same snapshots."""
+    from .views import power, radar, settle  # views builds on this module's helpers
     out = {}
     today = today or date.today()
     files = my_accounts.get("files") or []
@@ -593,7 +606,11 @@ def band_deals(my_accounts, paperwork_by_acc, strict=False, file_text=None, sign
         check_receipts(q4, known, strict)
         check_receipts(q5, known, strict)
         check_receipts(q3, known, strict)
-        out[acc["id"]] = {"q1": q1, "q2": q2, "q3": q3, "q4": q4, "q5": q5, "name": acc.get("name")}
+        rd, pm = radar(acc, q1, q2, q4, pw, today), power(acc, q1, q2, pw)
+        check_receipts(rd, known, strict)
+        check_receipts(pm, known, strict)
+        out[acc["id"]] = {"q1": q1, "q2": q2, "q3": q3, "q4": q4, "q5": q5, "radar": settle(rd), "power": pm,
+                          "name": acc.get("name"), "in_export": not acc.get("paperwork_only")}
     return out
 
 
@@ -604,11 +621,17 @@ def build_book(db, strict=False, today=None, at=None):
     if not ma or not isinstance(ma[0], dict):
         return {"as_of": None, "state": "waiting for first sync", "accounts": {}}
     pw, ft, times = {}, {}, [ma[1]]
-    for a in ma[0].get("accounts") or []:
+    accs = [a for a in ma[0].get("accounts") or [] if isinstance(a, dict) and a.get("id")]
+    have = {a["id"] for a in accs}
+    accs += [{"id": i, "paperwork_only": True} for i in account_ids(db) if i not in have]  # whoami's new accounts: paperwork only
+    for a in accs:
         s = get("get_all_paperwork", {"account": a["id"]})
         if s:
             pw[a["id"]] = s[0]
             times.append(s[1])
+        if a.get("paperwork_only"):
+            a["name"] = next(((r.get("data") or {}).get("name") for r in (s[0] if s else {}).get("records") or []
+                              if r.get("path") == "profile.json"), None)
     for f in ma[0].get("files") or []:
         s = get("get_file", {"id": f["id"]})
         if s and isinstance(s[0], dict):
@@ -619,7 +642,7 @@ def build_book(db, strict=False, today=None, at=None):
     if sg:
         times.append(sg[1])
     return {"as_of": datetime.fromtimestamp(min(times), timezone.utc).isoformat(),  # oldest input = honest freshness
-            "state": "ok", "accounts": band_deals(ma[0], pw, strict, ft, signals, today)}
+            "state": "ok", "accounts": band_deals({**ma[0], "accounts": accs}, pw, strict, ft, signals, today)}
 
 
 # ---- What Changed (story 7.1, minimal): new signals and deal band / stage / value moves ----

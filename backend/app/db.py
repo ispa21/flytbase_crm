@@ -11,7 +11,7 @@ LITE = "INTEGER PRIMARY KEY"
 DDL = """
 CREATE TABLE IF NOT EXISTS snapshots(
   id {pk}, tool TEXT NOT NULL, args TEXT NOT NULL,
-  fetched_at DOUBLE PRECISION NOT NULL, payload TEXT NOT NULL);
+  fetched_at DOUBLE PRECISION NOT NULL, checked_at DOUBLE PRECISION, payload TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS snap_key ON snapshots(tool, args, id);
 CREATE TABLE IF NOT EXISTS signals(
   id TEXT PRIMARY KEY, account TEXT, first_seen DOUBLE PRECISION NOT NULL, payload TEXT NOT NULL);
@@ -32,6 +32,13 @@ CREATE TABLE IF NOT EXISTS notes(
 INSERT INTO caller(id) VALUES(1) ON CONFLICT DO NOTHING;
 INSERT INTO changes(id) VALUES(1) ON CONFLICT DO NOTHING;
 """
+# CREATE TABLE IF NOT EXISTS never alters a live table: columns added after the first deploy go here.
+# Postgres only; sqlite is always created fresh from DDL.
+PG_MIGRATE = """
+ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS checked_at DOUBLE PRECISION;
+UPDATE snapshots SET checked_at=fetched_at WHERE checked_at IS NULL;
+"""
+_READY: set[str] = set()  # pg urls whose schema this process has already ensured
 
 
 def key(args: dict | None) -> str:
@@ -54,9 +61,13 @@ class DB:
         else:  # "sqlite::memory:" or "sqlite:///path"
             self.c = sqlite3.connect(url.split(":", 1)[1].lstrip("/") or ":memory:", isolation_level=None,
                                      check_same_thread=False)
-        for stmt in DDL.format(pk=PG if self.pg else LITE).split(";"):
+        if self.pg and url in _READY:  # schema once per process, not ~15 round trips on every request
+            return
+        for stmt in (DDL.format(pk=PG if self.pg else LITE) + (PG_MIGRATE if self.pg else "")).split(";"):
             if stmt.strip():
                 self.x(stmt)
+        if self.pg:
+            _READY.add(url)
 
     def x(self, sql, *params):
         sql = sql.replace("?", "%s") if self.pg else sql
@@ -66,20 +77,23 @@ class DB:
     def close(self):
         self.c.close()
 
-    # --- snapshots (append-only) ---------------------------------------
+    # --- snapshots: content append-only; fetched_at = content first seen, checked_at = last fetched ---
     def add_snapshot(self, tool, args, payload, t) -> bool:
-        """Append once; True (and counter bump) if content differs from the previous one."""
-        prev = self.latest(tool, args)
-        self.x("INSERT INTO snapshots(tool,args,fetched_at,payload) VALUES(?,?,?,?)",
-               tool, key(args), t, json.dumps(payload))
-        changed = prev is None or _stable(prev[0]) != _stable(payload)
-        if changed:
-            self.bump()
-        return changed
+        """New content -> new row, counter bump, True. Unchanged content only moves checked_at,
+        so the table grows with changes, not with polls (~30 MB/day of identical paperwork otherwise)."""
+        r = self.x("SELECT id, payload FROM snapshots WHERE tool=? AND args=? ORDER BY id DESC LIMIT 1",
+                   tool, key(args)).fetchone()
+        if r and _stable(json.loads(r[1])) == _stable(payload):
+            self.x("UPDATE snapshots SET checked_at=? WHERE id=?", t, r[0])
+            return False
+        self.x("INSERT INTO snapshots(tool,args,fetched_at,checked_at,payload) VALUES(?,?,?,?,?)",
+               tool, key(args), t, t, json.dumps(payload))
+        self.bump()
+        return True
 
     def latest(self, tool, args=None):
-        """-> (payload, fetched_at) or None."""
-        r = self.x("SELECT payload, fetched_at FROM snapshots WHERE tool=? AND args=? ORDER BY id DESC LIMIT 1",
+        """-> (payload, last fetched) or None."""
+        r = self.x("SELECT payload, checked_at FROM snapshots WHERE tool=? AND args=? ORDER BY id DESC LIMIT 1",
                    tool, key(args)).fetchone()
         return (json.loads(r[0]), r[1]) if r else None
 
@@ -97,12 +111,17 @@ class DB:
         return [(json.loads(p), f) for p, f in rows]
 
     def latest_all(self):
-        rows = self.x("SELECT tool, args, MAX(fetched_at) FROM snapshots GROUP BY tool, args ORDER BY tool, args")
+        rows = self.x("SELECT tool, args, MAX(checked_at) FROM snapshots GROUP BY tool, args ORDER BY tool, args")
         return [(t, json.loads(a), f) for t, a, f in rows.fetchall()]
+
+    def distinct(self, tool, col="payload"):
+        """Every distinct payload (or args) ever stored for a tool, decoded."""
+        assert col in ("payload", "args")
+        return [json.loads(r[0]) for r in self.x(f"SELECT DISTINCT {col} FROM snapshots WHERE tool=?", tool).fetchall()]
 
     def last_fetch(self, *tools):
         q = ",".join("?" * len(tools))
-        return self.x(f"SELECT MAX(fetched_at) FROM snapshots WHERE tool IN ({q})", *tools).fetchone()[0]
+        return self.x(f"SELECT MAX(checked_at) FROM snapshots WHERE tool IN ({q})", *tools).fetchone()[0]
 
     def add_signal(self, sig: dict, now: float) -> bool:
         cur = self.x("INSERT INTO signals(id,account,first_seen,payload) VALUES(?,?,?,?) ON CONFLICT DO NOTHING",
@@ -111,9 +130,11 @@ class DB:
 
     # --- queue ----------------------------------------------------------
     def enqueue(self, prio, tool, args=None, attempts=0, not_before=0.0) -> bool:
-        """False if the same call already waits (dedupe)."""
+        """False if the same call already waits (dedupe). A waiting call is raised to the more urgent
+        priority: a signal's REFETCH must not stay stuck behind the COLD copy that schedule() queued."""
         return self.x("INSERT INTO queue(prio,tool,args,attempts,not_before) VALUES(?,?,?,?,?) "
-                      "ON CONFLICT DO NOTHING", prio, tool, key(args), attempts, not_before).rowcount == 1
+                      "ON CONFLICT(tool, args) DO UPDATE SET prio=excluded.prio WHERE excluded.prio < queue.prio",
+                      prio, tool, key(args), attempts, not_before).rowcount == 1
 
     def has_eligible(self, t) -> bool:
         return self.x("SELECT 1 FROM queue WHERE not_before<=? LIMIT 1", t).fetchone() is not None

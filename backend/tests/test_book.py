@@ -244,3 +244,118 @@ def test_q3_no_paperwork(db):
     db.add_snapshot("get_my_accounts", {}, unwrap(fixture("get_my_accounts", {})), 1000.0)
     q = build_book(db, strict=True, today=TODAY)["accounts"]["B"]["q3"]
     assert q["loaded"] is False and all(m["owner"] == "not on file" for m in q["moves"])
+
+
+# ---- story 8.1: radar and power per deal; paperwork-only accounts ----
+def rows(acc):
+    return {r["deal"]["id"]: r for r in acc["radar"]["deals"]}
+
+
+def test_radar_a_b(db):
+    bk = load4(db)
+    a, b = rows(bk["A"]), rows(bk["B"])
+    assert set(a) == {"a_renewal", "a_tarn", "a_westmere", "a_training"}  # declined offers and told-only lines are not rows
+    assert set(b) == {"b_renewal", "b_idle", "b_insurance", "b_sister", "b_reporting"}
+    ra, rb = a["a_renewal"], b["b_renewal"]
+    assert (ra["deadline"]["level"], ra["deadline"]["date"]) == ("amber", "2026-11-30")
+    assert (rb["deadline"]["level"], rb["deadline"]["date"]) == ("red", "2026-11-02") and rb["deal"]["value"] == 140000
+    assert ra["cold"]["level"] == "unknown" and ra["cold"]["label"] == "no named decider or payer"  # alliance office, Schedule 2
+    c = rb["cold"]
+    assert c["level"] == "amber" and c["label"] == "Stefan Roy: no contact for 32 days" and c["date"] == "2026-11-13"
+    assert {"id": "B/calls/2026-10-13_check_in.txt", "kind": "record"} in c["receipts"]
+    assert [b[d]["blocked"]["level"] for d in ("b_renewal", "b_idle", "b_insurance", "b_sister")] == ["red", "red", "green", "red"]
+    assert ra["blocked"] == {"level": "green", "label": "no blocker on record", "date": None, "receipts": [{"id": "a_renewal", "kind": "deal"}]}
+    off = a["a_training"]
+    assert off["deal"]["kind"] == "offer" and {off[k]["level"] for k in ("deadline", "cold", "blocked")} == {"unknown"}
+    assert bk["A"]["radar"]["counts"] == {"deadline": {"red": 0, "amber": 1, "green": 0, "unknown": 3},
+                                          "cold": {"red": 0, "amber": 0, "green": 0, "unknown": 4},
+                                          "blocked": {"red": 0, "amber": 0, "green": 3, "unknown": 1}}
+    assert bk["B"]["radar"]["counts"]["blocked"] == {"red": 3, "amber": 0, "green": 1, "unknown": 1}
+    for acc in bk.values():
+        for r in acc["radar"]["deals"]:
+            for k in ("deadline", "cold", "blocked"):
+                assert len(r[k]["label"]) <= 48 and (r[k]["level"] != "green" or r[k]["receipts"])
+
+
+def test_radar_green_and_bare_green():
+    from app.views import settle
+    from app.book import band_deals
+    ma = unwrap(fixture("get_my_accounts", {}))
+    pw = {k: unwrap(fixture("get_all_paperwork", {"account": k})) for k in "AB"}
+    r = rows(band_deals(ma, pw, strict=True, today=date(2026, 9, 1))["A"])["a_renewal"]["deadline"]
+    assert r["level"] == "green" and r["date"] == "2026-10-31" and {"id": "A/profile.json", "kind": "record"} in r["receipts"]
+    rd = {"deals": [{"deadline": {"level": "green", "label": "x", "date": "2026-01-01", "receipts": []},
+                     "cold": {"level": "red", "label": "y", "date": None, "receipts": []},
+                     "blocked": {"level": "unknown", "label": "z", "date": None, "receipts": []}}]}
+    assert settle(rd)["deals"][0]["deadline"]["level"] == "unknown" and rd["counts"]["deadline"]["green"] == 0
+
+
+def roles(acc, deal):
+    return next(d for d in acc["power"]["deals"] if d["deal"]["id"] == deal)
+
+
+def test_power_roles(db):
+    bk = load4(db)
+    a = roles(bk["A"], "a_renewal")
+    assert [p["name"] for p in a["roles"]["decides"]] == ["the alliance office"] and a["roles"]["decides"][0]["side"] == "org"
+    assert a["gaps"] == ["pays", "blocks"]
+    ch = a["roles"]["champion"][0]
+    assert (ch["id"], ch["basis"], ch["why"]) == ("rhys_calder", "inferred", "warm, spoke for this deal (rc_appetite_2)")
+    km = next(p for p in a["roles"]["uses"] if p["id"] == "karen_mbeki")
+    assert [w["since"] for w in km["waiting_on"]] == ["2026-08-11"]  # the (none) request row and her email are one item
+    assert {r["id"] for r in km["waiting_on"][0]["receipts"]} == {"A/requests.csv", "A/emails/2026-08-11_karen_batteries.txt"}
+    b = roles(bk["B"], "b_renewal")
+    assert b["gaps"] == [] and b["roles"]["decides"][0]["id"] == "stefan_roy" and b["roles"]["decides"][0]["relationship"] == "warm"
+    blk = {p["name"]: p for p in b["roles"]["blocks"]}
+    assert blk["Finance cannot verify the savings the programme claims"]["side"] == "org"
+    gf = blk["Group finance (shared mailbox)"]
+    assert gf["side"] == "org" and gf["id"] is None and gf["waiting_on"][0]["since"] == "2026-10-08"
+    assert b["roles"]["pays"][0]["name"] == "group security" and b["roles"]["champion"][0]["why"].endswith("(sr_roll_2)")
+    assert roles(bk["B"], "b_insurance")["gaps"] == ["blocks", "champion"]  # only Neel Sharma (FlytBase) spoke for it
+    assert all("why" not in p for d in bk["B"]["power"]["deals"] for r, ps in d["roles"].items() if r != "champion" for p in ps)
+
+
+def test_paperwork_only_account_in_book_and_kept_live(db):
+    from app.sync import PAPERWORK_EVERY, Sync
+    load4(db)
+    h = unwrap(fixture("get_all_paperwork", {"account": "B"}))
+    h["account"] = "H"
+    next(r for r in h["records"] if r["path"] == "profile.json")["data"]["name"] = "Harbour Test Group"
+    db.add_snapshot("get_all_paperwork", {"account": "H"}, h, 1000.0)
+    who = unwrap(fixture("whoami", {}))
+    who["new_accounts"] = ["H", "K"]
+    db.add_snapshot("whoami", {}, who, 1000.0)
+    bk = build_book(db, strict=True, today=TODAY)["accounts"]  # strict: every receipt real and account-scoped
+    assert list(bk) == ["A", "B", "H", "K"] and bk["A"]["in_export"] and not bk["H"]["in_export"]
+    H, K = bk["H"], bk["K"]
+    assert H["name"] == "Harbour Test Group" and K["name"] is None
+    oc = H["q1"]["bands"]["on_contract"]
+    assert [(l["id"], l["value"]) for l in oc] == [(None, 140000)] and {"id": "H/contract.txt", "kind": "record"} in oc[0]["receipts"]
+    assert not any("enewal" in l["title"] for l in H["q1"]["bands"]["unbacked"])
+    ren = [i for i in H["q4"]["items"] if i["kind"] == "renewal"]
+    assert [(i["deal"], i["level"], i["days_left"]) for i in ren] == [(None, "amber", 78)]
+    (row,) = H["radar"]["deals"]
+    assert row["deal"]["kind"] == "contract" and row["deal"]["id"] is None
+    assert (row["deadline"]["level"], row["deadline"]["date"]) == ("amber", "2027-01-31")
+    assert row["cold"]["level"] == "amber" and row["blocked"]["level"] == "unknown"
+    (pm,) = H["power"]["deals"]
+    d = pm["roles"]["decides"][0]
+    assert (d["name"], d["id"], d["side"], d["relationship"]) == ("Stefan Roy", None, "customer", "not on file")
+    assert pm["gaps"] == ["blocks", "champion"] and H["q3"]["moves"][0]["kind"] == "renewal"
+    assert K["q1"]["paperwork_loaded"] is False and K["radar"]["deals"] == [] and K["power"]["deals"] == []
+    # stays live: due, and after a manual resync, H's paperwork is fetched again; K's first fetch is queued
+    s = Sync(db)
+
+    def queued():
+        got = set()
+        while (i := db.pop(1e12)):
+            got.add((i[1], i[2].get("account")))
+        return got
+    s.schedule(1000.0 + PAPERWORK_EVERY + 1)
+    assert {("get_all_paperwork", x) for x in "ABHK"} <= queued()
+    s.schedule(1001.0)
+    q = queued()
+    assert ("get_all_paperwork", "K") in q and ("get_all_paperwork", "H") not in q
+    db.set_resync(1002.0)
+    s.schedule(1002.0)
+    assert ("get_all_paperwork", "H") in queued()

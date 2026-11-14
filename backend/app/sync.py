@@ -23,6 +23,19 @@ def _ids(items):
     return out
 
 
+def account_ids(db):
+    """Every account the app knows, in order: get_my_accounts, every whoami ever stored (new_accounts, open packs),
+    and any account with paperwork fetched. New accounts (H, K) are never in get_my_accounts."""
+    ma = db.latest("get_my_accounts")
+    ids = [a.get("id") for a in (ma[0].get("accounts") or []) if isinstance(a, dict)] if ma and isinstance(ma[0], dict) else []
+    for p in db.distinct("whoami"):
+        if isinstance(p, dict):
+            packs = [x for x in p.get("pack") or [] if not (isinstance(x, dict) and x.get("open") is False)]
+            ids += _ids(p.get("new_accounts")) + _ids(packs)
+    ids += [a.get("account") for a in db.distinct("get_all_paperwork", "args") if isinstance(a, dict)]
+    return list(dict.fromkeys(i for i in ids if isinstance(i, str) and i))
+
+
 class Sync:
     def __init__(self, db):
         self.db = db
@@ -39,11 +52,10 @@ class Sync:
         self._due(now, WHOAMI_EVERY, WHOAMI, "whoami")
         self._due(now, ACCOUNTS_EVERY, REFETCH, "get_my_accounts")
         self._due(now, FILES_TEAM_EVERY, COLD, "get_flytbase_team")
+        for aid in account_ids(d):  # whoami-only accounts too, so their paperwork stays live and resync covers them
+            self._due(now, PAPERWORK_EVERY, COLD, "get_all_paperwork", {"account": aid})
         ma = d.latest("get_my_accounts")
         if ma and isinstance(ma[0], dict):
-            for a in ma[0].get("accounts") or []:
-                if isinstance(a, dict) and a.get("id"):
-                    self._due(now, PAPERWORK_EVERY, COLD, "get_all_paperwork", {"account": a["id"]})
             for f in ma[0].get("files") or []:
                 if isinstance(f, dict) and f.get("id"):
                     self._due(now, FILES_TEAM_EVERY, COLD, "get_file", {"id": f["id"]})

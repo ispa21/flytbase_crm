@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.db import DB
+from app.db import _READY, DB
 from app.health import health
 from app.mcp import McpClient, McpError, unwrap
 from app.queue import MAX_ATTEMPTS, REFETCH, SPACING
@@ -43,7 +43,7 @@ def db():
         if d.pg:
             d.x(f"DROP TABLE {t}")
     if d.pg:
-        d.close(); d = DB(os.environ["TEST_DATABASE_URL"])
+        d.close(); _READY.clear(); d = DB(os.environ["TEST_DATABASE_URL"])
     yield d
     d.close()
 
@@ -153,8 +153,8 @@ def test_failing_handler_snapshot_once_not_requeued(db):
         raise RuntimeError("handler")
     sync.handle = boom
     go(db, clock, client, sync)
-    n = db.x("SELECT COUNT(*) FROM snapshots").fetchone()[0]
-    assert n == len(starts) > 0  # one snapshot per call, no duplicates
+    n, distinct = db.x("SELECT COUNT(*), COUNT(DISTINCT tool || args) FROM snapshots").fetchone()
+    assert 0 < n == distinct <= len(starts)  # one row per call target: no duplicates
     # nothing was requeued by failure: only scheduled items remain
     assert db.x("SELECT COUNT(*) FROM queue WHERE attempts>0").fetchone()[0] == 0
 
@@ -210,3 +210,37 @@ def test_resync_marks_everything_stale_and_refetches_once_each(db):
     asyncio.run(run(db, client, sync, clock))
     assert len(starts) > n
     assert all(b - a >= SPACING for a, b in zip(starts, starts[1:]))
+
+
+def test_unchanged_refetch_moves_checked_at_not_a_new_row(db):
+    n0 = db.changes()
+    assert db.add_snapshot("whoami", {}, {"me": 1, "exported_at": "a"}, 100.0)
+    assert not db.add_snapshot("whoami", {}, {"me": 1, "exported_at": "b"}, 200.0)  # exported_at is noise
+    assert db.x("SELECT COUNT(*) FROM snapshots").fetchone()[0] == 1 and db.changes() == n0 + 1
+    assert db.latest("whoami")[1] == 200.0 == db.last_fetch("whoami")  # freshness = last fetch
+    assert db.add_snapshot("whoami", {}, {"me": 2}, 300.0)
+    assert db.snapshot_at("whoami", {}, 250.0) == ({"me": 1, "exported_at": "a"}, 100.0)  # content in force then
+    assert db.snapshot_at("whoami", {}, 300.0)[0] == {"me": 2}
+
+
+def test_requeue_raises_priority_never_lowers(db):
+    assert db.enqueue(4, "get_all_paperwork", {"account": "A"})  # schedule(): COLD
+    assert db.enqueue(3, "get_all_paperwork", {"account": "A"})  # signal: REFETCH wins
+    assert not db.enqueue(4, "get_all_paperwork", {"account": "A"})
+    assert db.queue_len() == 1 and db.pop(0)[0] == 3
+
+
+def test_pg_migrates_live_snapshots_table(db):
+    if not db.pg:
+        pytest.skip("Postgres only: sqlite is always created fresh")
+    db.x("DROP TABLE snapshots")
+    db.x("CREATE TABLE snapshots(id BIGSERIAL PRIMARY KEY, tool TEXT NOT NULL, args TEXT NOT NULL, "
+         "fetched_at DOUBLE PRECISION NOT NULL, payload TEXT NOT NULL)")  # first-deploy shape
+    db.x("INSERT INTO snapshots(tool,args,fetched_at,payload) VALUES('whoami','{}',50.0,'{\"me\": 1}')")
+    _READY.clear()
+    d = DB(os.environ["TEST_DATABASE_URL"])
+    try:
+        assert d.latest("whoami") == ({"me": 1}, 50.0)
+        assert not d.add_snapshot("whoami", {}, {"me": 1}, 60.0) and d.last_fetch("whoami") == 60.0
+    finally:
+        d.close()

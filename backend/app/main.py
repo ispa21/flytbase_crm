@@ -54,6 +54,7 @@ async def worker(authorization: str = Header("")):
     return await _run(False)
 
 
+@app.get("/api/poke")  # GET too: free uptime pingers keep the worker alive with no secret
 @app.post("/api/poke")
 async def poke(tasks: BackgroundTasks):
     """Open page asks for a run: only if the lease is free and the last run ended over 60 s ago."""
