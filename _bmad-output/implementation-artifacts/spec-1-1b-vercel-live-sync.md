@@ -2,7 +2,8 @@
 title: 'Live sync on Vercel: cron worker, Postgres queue, health (stories 1.1-1.4, rework)'
 type: 'feature'
 created: '2026-11-14'
-status: 'draft'
+status: 'in-progress'
+baseline_commit: '0bc44ac'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -20,7 +21,7 @@ context:
 
 **Problem:** The first build assumed one always-on process with SQLite. The user chose Vercel, where functions are short-lived and have no disk, so that design cannot stay live there.
 
-**Approach:** Rework `backend/` for Vercel. Vercel Cron calls a worker endpoint every minute. The worker takes a Postgres lease, so only one caller exists, and makes MCP calls at least 61 s apart. All state (snapshots, signals, queue, last call time) lives in Postgres. The page learns of new data by polling a change counter.
+**Approach:** Rework `backend/` for Vercel. A GitHub Actions schedule (every 5 min) and an open page's poke call a worker endpoint (Vercel Hobby cron is daily only). The worker takes a Postgres lease, so only one caller exists, and makes MCP calls at least 61 s apart. All state (snapshots, signals, queue, last call time) lives in Postgres. The page learns of new data by polling a change counter.
 
 ## Boundaries & Constraints
 
@@ -32,7 +33,8 @@ context:
 
 | Scenario | Input / State | Expected Output / Behavior | Error Handling |
 |----------|--------------|---------------------------|----------------|
-| Worker run | Valid cron secret, lease free | Takes lease, runs calls spaced 61 s from stored `last_call_at`, stops before the time limit, releases lease | Bad secret: 401 |
+| Worker run | Valid cron secret, lease free | Takes lease, runs calls spaced 61 s from stored `last_call_at`, stops after about 240 s, releases lease | Bad secret: 401 |
+| Poke | `/api/poke`, no secret | Starts a run only if lease free and last run ended over 60 s ago; otherwise no-op | Never faster than the lease rule allows |
 | Overlap | Lease held by another run | Exits at once, no call | N/A |
 | Cold start | Empty database | Queue seeds whoami, get_my_accounts, then paperwork per account and files, team, signals; health shows progress | Failed call retried with backoff and attempt cap |
 | New signal | get_signals returns an unseen `id` | Stored once; account and paperwork refetch queued; change counter increments | No `id` or non-object: logged, skipped |
@@ -48,7 +50,8 @@ context:
 - `backend/app/queue.py`, `sync.py`, `mcp.py` -- reuse the logic from the first build, move state to Postgres
 - `backend/app/worker.py` -- lease, spacing, run loop with time budget
 - `backend/app/main.py`, `health.py` -- `/api/worker`, `/api/health`, `/api/changes`
-- `backend/api/index.py`, `vercel.json` -- Vercel entry and the 1-minute cron
+- `backend/api/index.py`, `vercel.json` -- Vercel entry, `maxDuration` 300, daily fallback cron
+- `.github/workflows/worker.yml` -- schedule `*/5 * * * *`, curl `/api/worker` with `CRON_SECRET`
 - Do not change: `mcp-cache/`, ADRs, `CLAUDE.md`
 
 ## Tasks & Acceptance
@@ -57,8 +60,8 @@ context:
 - [ ] `backend/app/db.py` -- schema and helpers (append snapshot, add signal, enqueue with dedupe, lease, change counter)
 - [ ] `backend/app/worker.py` -- lease, 61 s spacing from `caller.last_call_at`, priority order, time budget, attempt cap and backoff
 - [ ] `backend/app/sync.py`, `mcp.py` -- due polls (signals 2 min, whoami 10 min), scheduled refresh of paperwork, files, team; payload and id guards
-- [ ] `backend/app/main.py`, `health.py` -- `/api/worker` (cron secret), `/api/health` with per-tool age, `/api/changes`
-- [ ] `backend/api/index.py`, `vercel.json` -- entry point and cron `* * * * *`
+- [ ] `backend/app/main.py`, `health.py` -- `/api/worker` (cron secret), `/api/poke`, `/api/health` with per-tool age, `/api/changes`
+- [ ] `backend/api/index.py`, `vercel.json`, `.github/workflows/worker.yml` -- entry point, maxDuration 300, GitHub Actions schedule `*/5 * * * *` using secrets `CRON_SECRET` and `APP_URL`, daily Vercel cron fallback
 - [ ] `backend/tests/` -- one test per matrix row, fake clock and transport
 
 **Acceptance Criteria:**

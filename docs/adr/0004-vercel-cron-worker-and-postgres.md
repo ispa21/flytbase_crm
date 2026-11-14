@@ -1,4 +1,4 @@
-# Run on Vercel: a cron-driven worker with a Postgres lease
+# Run on Vercel: a triggered worker with a Postgres lease
 
 Supersedes the "one always-on process, SQLite, SSE" parts of ADR 0003 and the in-memory queue of ADR 0002. The rules of ADR 0002 stay: one caller, at least 61 s between MCP calls, writes included, priority order, dated append-only snapshots, stale after 5 minutes.
 
@@ -8,7 +8,7 @@ The user chose Vercel as the host. Vercel functions are short-lived and have no 
 
 - **Backend:** FastAPI as a Vercel Python function. **Frontend:** React (Vite) as static files on the same project and URL.
 - **Database:** hosted Postgres (Neon, via the Vercel Marketplace). Tables: `snapshots(tool, args, fetched_at, payload)` append-only; `signals(id, ...)`; `queue(prio, tool, args, ...)`; `caller(id=1, last_call_at, lease_until)`.
-- **Worker run:** Vercel Cron calls `/api/worker` every minute (secured with `CRON_SECRET`). A run takes the lease (`UPDATE caller ... WHERE lease_until < now()`). If it cannot, it exits at once, so two runs never overlap. With the lease it loops: wait until `last_call_at + 61 s`, take the highest-priority queue item, make the call, store the result, set `last_call_at`. It stops about 30 s before the function time limit and releases the lease. Spacing is kept in the database, so restarts and overlapping invocations cannot break the one-call-a-minute rule.
+- **Worker run:** A trigger calls `/api/worker`. On the Hobby plan Vercel Cron runs once a day only, so the main trigger is a **GitHub Actions schedule every 5 minutes** (its minimum, and runs can be delayed), sending `CRON_SECRET`. A second trigger: an open page calls `/api/poke`, which starts a run if none is active and the last one ended over a minute ago. A daily Vercel cron stays as a last fallback. All triggers are safe together because of the lease. A run takes the lease (`UPDATE caller ... WHERE lease_until < now()`). If it cannot, it exits at once, so two runs never overlap. With the lease it loops: wait until `last_call_at + 61 s`, take the highest-priority queue item, make the call, store the result, set `last_call_at`. It runs up to about 240 s (Hobby limit is 300 s), then stops and releases the lease. Spacing is kept in the database, so restarts and overlapping invocations cannot break the one-call-a-minute rule.
 - **Self-scheduling:** each run adds `get_signals` (due every 2 min) and `whoami` (every 10 min) to the queue when due, then the cold-start and refresh items.
 - **Live push:** no SSE (functions cannot hold a stream open for long). The page polls a cheap `/api/changes?since=<n>` every 10 s and refetches answers when the change counter moves.
 - **Token:** `AQ_TOKEN` is a Vercel environment variable. Never in the repo or browser.
@@ -16,7 +16,7 @@ The user chose Vercel as the host. Vercel functions are short-lived and have no 
 
 ## Consequences
 
-- **Needs a Vercel plan with 1-minute cron and a function time limit of at least 300 s (Pro).** Hobby allows cron once a day only, which would break "Stays live". Unconfirmed which plan the user has.
-- Throughput stays one MCP call per 61 s. Cold start (about 25 calls) takes about 25 minutes; the page shows progress and an "as of" time per answer.
+- **Plan is Hobby.** Each run makes about 4 calls (61 s apart), and runs start about every 5 minutes, so signals are seen within about 5 minutes. An open page pokes the worker, which keeps it fresher while someone is looking. GitHub Actions scheduled runs can be late and are paused after 60 days without repo activity; the user must add the repo secrets `CRON_SECRET` and the app URL, and clean up their other workflows first.
+- Peak throughput is one MCP call per 61 s while a run is active; between runs there are gaps. Cold start (about 25 calls) takes about 25 minutes; the page shows progress and an "as of" time per answer.
 - Tests use the same fake transport and fake clock, with an in-memory or local Postgres instead of SQLite.
 - Review findings from the first build that still apply and carry into the rebuild: a failing handler must not requeue the MCP call or duplicate the snapshot; reject payloads that are not objects; skip signals without `id`; attempt cap with backoff per failing call; refresh paperwork, files and team on a schedule, not only on signals; clear `last_error` after a success; health shows per-tool age; an SSE body without data lines raises `McpError`.

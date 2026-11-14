@@ -5,13 +5,16 @@ from .queue import COLD, REFETCH, SIGNALS, WHOAMI
 
 log = logging.getLogger("aq.sync")
 SIGNALS_EVERY = 120   # s
-WHOAMI_EVERY = 600    # s
+WHOAMI_EVERY = 600
+ACCOUNTS_EVERY = 600
+PAPERWORK_EVERY = 900
+FILES_TEAM_EVERY = 3600
 
 
 def _ids(items):
-    """new_accounts elements: plain ids or {id|account: ...}. Unknown shape -> skipped."""
+    """new_accounts elements: plain ids or {id|account: ...}. Unknown shape -> logged, skipped."""
     out = []
-    for x in items or []:
+    for x in items if isinstance(items, list) else []:
         v = x if isinstance(x, str) else (x.get("id") or x.get("account")) if isinstance(x, dict) else None
         if v:
             out.append(v)
@@ -21,57 +24,48 @@ def _ids(items):
 
 
 class Sync:
-    def __init__(self, queue, store, on_update=None):
-        self.q, self.store, self.on_update = queue, store, on_update
-        self.next_signals = self.next_whoami = 0.0  # due immediately: refreshes after restart too
-        self.q.on_result = self.handle
+    def __init__(self, db):
+        self.db = db
 
-    # --- scheduling -------------------------------------------------
-    def start(self):
-        """Cold start: queue whatever has no snapshot yet."""
-        for tool in ("whoami", "get_my_accounts", "get_flytbase_team", "get_signals"):
-            if not self.store.latest(tool):
-                self.q.put(COLD, tool)
-        self.fill_missing()
+    def _due(self, now, every, prio, tool, args=None):
+        snap = self.db.latest(tool, args)
+        if snap is None or now - snap[1] > every:
+            self.db.enqueue(prio, tool, args)
 
-    def fill_missing(self, prio=COLD):
-        ma = self.store.latest("get_my_accounts")
-        if not ma:
-            return
-        for a in ma[0].get("accounts", []):
-            if not self.store.latest("get_all_paperwork", {"account": a["id"]}):
-                self.q.put(prio, "get_all_paperwork", {"account": a["id"]})
-        for f in ma[0].get("files", []):
-            if not self.store.latest("get_file", {"id": f["id"]}):
-                self.q.put(prio, "get_file", {"id": f["id"]})
+    def schedule(self, now):
+        """Queue every poll or refresh that is due. Cheap; called before each call slot."""
+        d = self.db
+        self._due(now, SIGNALS_EVERY, SIGNALS, "get_signals")
+        self._due(now, WHOAMI_EVERY, WHOAMI, "whoami")
+        self._due(now, ACCOUNTS_EVERY, REFETCH, "get_my_accounts")
+        self._due(now, FILES_TEAM_EVERY, COLD, "get_flytbase_team")
+        ma = d.latest("get_my_accounts")
+        if ma and isinstance(ma[0], dict):
+            for a in ma[0].get("accounts") or []:
+                if isinstance(a, dict) and a.get("id"):
+                    self._due(now, PAPERWORK_EVERY, COLD, "get_all_paperwork", {"account": a["id"]})
+            for f in ma[0].get("files") or []:
+                if isinstance(f, dict) and f.get("id"):
+                    self._due(now, FILES_TEAM_EVERY, COLD, "get_file", {"id": f["id"]})
 
-    def tick(self):
-        now = self.q.clock.time()
-        if now >= self.next_signals:
-            self.next_signals = now + SIGNALS_EVERY
-            self.q.put(SIGNALS, "get_signals")
-        if now >= self.next_whoami:
-            self.next_whoami = now + WHOAMI_EVERY
-            self.q.put(WHOAMI, "whoami")
-
-    # --- results ----------------------------------------------------
-    async def handle(self, tool, args, payload):
-        now = self.q.clock.time()
-        self.store.add(tool, args, payload, now)
-        if tool == "get_my_accounts":
-            self.fill_missing()
-        elif tool == "get_signals":
-            for s in payload.get("signals", []):
-                if self.store.add_signal(s, now):
+    def handle(self, tool, args, payload, now):
+        """React to a stored snapshot. May raise; the worker contains it."""
+        d = self.db
+        if tool == "get_signals":
+            for s in payload.get("signals") or []:
+                if not isinstance(s, dict) or not s.get("id"):
+                    log.warning("signal without id skipped: %r", s)
+                    continue
+                if d.add_signal(s, now):
                     log.info("new signal %s", s["id"])
-                    self.q.put(REFETCH, "get_my_accounts")
+                    d.bump()
+                    d.enqueue(REFETCH, "get_my_accounts")
                     if s.get("account"):
-                        self.q.put(REFETCH, "get_all_paperwork", {"account": s["account"]})
+                        d.enqueue(REFETCH, "get_all_paperwork", {"account": s["account"]})
         elif tool == "whoami":
-            known = {a["id"] for a in (self.store.latest("get_my_accounts") or ({},))[0].get("accounts", [])}
+            ma = d.latest("get_my_accounts")
+            known = {a.get("id") for a in (ma[0].get("accounts") or [])} if ma else set()
             for acc in _ids(payload.get("new_accounts")):
-                if acc not in known:
-                    self.q.put(REFETCH, "get_all_paperwork", {"account": acc})
-                    self.q.put(REFETCH, "get_my_accounts")  # brings its files; fill_missing queues them
-        if self.on_update:
-            self.on_update()
+                if acc not in known and not d.latest("get_all_paperwork", {"account": acc}):
+                    d.enqueue(REFETCH, "get_all_paperwork", {"account": acc})
+                    d.enqueue(REFETCH, "get_my_accounts")  # brings its files; schedule() queues them

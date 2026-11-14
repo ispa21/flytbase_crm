@@ -1,0 +1,5 @@
+{
+  "functions": { "backend/api/index.py": { "maxDuration": 300 } },
+  "rewrites": [{ "source": "/api/(.*)", "destination": "/backend/api/index.py" }],
+  "crons": [{ "path": "/api/worker", "schedule": "0 6 * * *" }]
+}

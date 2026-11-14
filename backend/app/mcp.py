@@ -22,14 +22,19 @@ def unwrap(resp: dict) -> dict:
     if res.get("isError"):
         raise McpError(f"tool error: {text[:200]}")
     try:
-        return json.loads(text)
+        payload = json.loads(text)
     except ValueError:
         raise McpError(f"payload is not JSON: {text[:200]}")
+    if not isinstance(payload, dict):
+        raise McpError(f"payload is not an object: {text[:200]}")
+    return payload
 
 
 def _body_to_dict(r: httpx.Response) -> dict:
     if "text/event-stream" in r.headers.get("content-type", ""):
         datas = [ln[5:].strip() for ln in r.text.splitlines() if ln.startswith("data:")]
+        if not datas:
+            raise McpError("event stream had no data lines")
         return json.loads(datas[-1])
     return r.json()
 
@@ -45,7 +50,7 @@ class McpClient:
 
     async def _http(self, req: dict) -> dict:
         # ponytail: no initialize handshake / session id; add if the server demands it.
-        async with httpx.AsyncClient(timeout=60) as c:
+        async with httpx.AsyncClient(timeout=30) as c:
             r = await c.post(
                 self.url, json=req,
                 headers={"Authorization": f"Bearer {self.token}",
